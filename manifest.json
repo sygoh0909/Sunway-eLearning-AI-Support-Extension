@@ -1,13 +1,12 @@
 {
   "manifest_version": 3,
-  "name": "Sunway eLearning AI Support Extension",
+  "name": "Sunway Learning Support",
   "version": "1.0.0",
   "description": "AI-powered eLearn announcement aggregator",
-  "permissions": ["storage", "activeTab", "scripting"],
+  "permissions": ["storage", "activeTab", "scripting", "notifications", "alarms"],
   "host_permissions": ["https://elearn.sunway.edu.my/*"],
   "action": {
-    "default_popup": "src/popup/index.html",
-    "default_icon": "icons/icon48.png"
+    "default_popup": "src/popup/index.html"
   },
   "background": {
     "service_worker": "src/background/index.ts",
