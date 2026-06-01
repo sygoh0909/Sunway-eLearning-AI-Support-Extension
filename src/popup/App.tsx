@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import DeadlineTab from './DeadlineTab'
+import SettingsTab from './SettingsTab'
 
 type Tab = 'summary' | 'deadlines' | 'settings'
 
@@ -26,7 +27,7 @@ export default function App() {
       </div>
       {activeTab === 'summary' && <div>Summary coming soon</div>}
       {activeTab === 'deadlines' && <DeadlineTab />}
-      {activeTab === 'settings' && <div>Settings coming soon</div>}
+      {activeTab === 'settings' && <SettingsTab />}
     </div>
   )
 }
