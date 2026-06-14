@@ -40,6 +40,11 @@ const TASK_PATTERNS = [
 
 const ACTION_KEYWORDS = /\b(submit|deadline|due|register|attend|join|complete|sign\s*up|enrol|participate|hand\s*in|upload|exam|test|quiz|presentation|competition|event|seminar|meeting|group|grouping|form\s+group)\b/i
 
+export async function extractDeadlines(text: string): Promise<Deadline[]> {
+  // TODO: Feature 2 implementation
+  return []
+}
+
 export function scoreUrgency(dueDate: string): 'overdue' | 'soon' | 'upcoming' {
   if (!dueDate) return 'upcoming'
   // empty string used for deadlines with no date found
