@@ -40,6 +40,82 @@ const TASK_PATTERNS = [
 
 const ACTION_KEYWORDS = /\b(submit|deadline|due|register|attend|join|complete|sign\s*up|enrol|participate|hand\s*in|upload|exam|test|quiz|presentation|competition|event|seminar|meeting|group|grouping|form\s+group)\b/i
 
+// parse date helper
+function parseDate(dateStr: string): string | null {
+  // Strip ordinal suffixes: "11th" → "11", "3rd" → "3"
+  const cleaned = dateStr.trim().replace(/(\d+)(?:st|nd|rd|th)/gi, '$1')
+  const parsed = new Date(cleaned)
+  if (!isNaN(parsed.getTime()) && parsed.getFullYear() >= 2020) {
+    return parsed.toISOString().split('T')[0]
+  }
+
+  const currentYear = new Date().getFullYear()
+  const withYear = cleaned.match(/\d{4}/) ? cleaned : `${cleaned} ${currentYear}`
+  const retry = new Date(withYear)
+  if (!isNaN(retry.getTime())) {
+    // If the resulting date is more than 2 months in the past, try next year
+    const now = new Date()
+    if (retry.getTime() < now.getTime() - 60 * 24 * 60 * 60 * 1000) {
+      const nextYear = new Date(`${cleaned} ${currentYear + 1}`)
+      if (!isNaN(nextYear.getTime())) {
+        return nextYear.toISOString().split('T')[0]
+      }
+    }
+    return retry.toISOString().split('T')[0]
+  }
+
+  // Try "Month Day Year" / "Day Month Year" explicitly
+  const monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+  const parts = cleaned.split(/[\s,/-]+/).filter(Boolean)
+  let month = -1, day = -1, year = currentYear
+  for (const p of parts) {
+    const monthIdx = monthNames.findIndex(m => p.toLowerCase().startsWith(m))
+    if (monthIdx >= 0) { month = monthIdx; continue }
+    const num = parseInt(p)
+    if (!isNaN(num)) {
+      if (num > 31) { year = num < 100 ? 2000 + num : num }
+      else if (day < 0) { day = num }
+    }
+  }
+  if (month >= 0 && day > 0) {
+    const result = new Date(year, month, day)
+    if (!isNaN(result.getTime())) {
+      const now = new Date()
+      if (result.getTime() < now.getTime() - 60 * 24 * 60 * 60 * 1000) {
+        const nextYearResult = new Date(year + 1, month, day)
+        return nextYearResult.toISOString().split('T')[0]
+      }
+      return result.toISOString().split('T')[0]
+    }
+  }
+
+  return null
+}
+
+// extract task description helper
+function extractTaskDescription(text: string, dateMatch: RegExpExecArray): string {
+  const matchIndex = dateMatch.index ?? 0
+  const contextStart = Math.max(0, matchIndex - 150)
+  const context = text.slice(contextStart, matchIndex).trim()
+
+  for (const pattern of TASK_PATTERNS) {
+    pattern.lastIndex = 0
+    const taskMatch = pattern.exec(context)
+    if (taskMatch?.[1]) {
+      const task = taskMatch[1].trim()
+      if (task.length > 5 && task.length < 100) return task
+    }
+  }
+
+  const sentences = context.split(/[.!?\n]/).filter(s => s.trim().length > 5)
+  if (sentences.length > 0) {
+    const last = sentences[sentences.length - 1].trim()
+    if (last.length < 100) return last
+  }
+
+  return 'Assignment/Submission'
+}
+
 export async function extractDeadlines(text: string): Promise<Deadline[]> {
   // TODO: Feature 2 implementation
   return []
