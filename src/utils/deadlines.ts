@@ -116,9 +116,52 @@ function extractTaskDescription(text: string, dateMatch: RegExpExecArray): strin
   return 'Assignment/Submission'
 }
 
-export async function extractDeadlines(text: string): Promise<Deadline[]> {
-  // TODO: Feature 2 implementation
-  return []
+export async function extractDeadlines(text: string, courseId = '', courseName = ''): Promise<Deadline[]> {
+  const deadlines: Deadline[] = []
+  const seenDates = new Set<string>()
+
+  for (const pattern of DATE_PATTERNS) {
+    pattern.lastIndex = 0
+    let match: RegExpExecArray | null
+
+    while ((match = pattern.exec(text)) !== null) {
+      const rawDate = match[1] ?? match[0]
+      const isoDate = parseDate(rawDate)
+      if (!isoDate || seenDates.has(isoDate)) continue
+      seenDates.add(isoDate)
+
+      const task = extractTaskDescription(text, match)
+      const urgency = scoreUrgency(isoDate)
+
+      deadlines.push({
+        id: `dl-${courseId}-${isoDate}-${deadlines.length}`,
+        courseId,
+        courseName,
+        task,
+        dueDate: isoDate,
+        urgency,
+      })
+    }
+  }
+
+  // If no dates found but text mentions actionable keywords, mark as upcoming
+  if (deadlines.length === 0 && ACTION_KEYWORDS.test(text)) {
+    const sentences = text.split(/[.!?\n]/).filter(s => s.trim().length > 5)
+    const actionSentence = sentences.find(s => ACTION_KEYWORDS.test(s))
+    if (actionSentence) {
+      const task = actionSentence.trim().slice(0, 80)
+      deadlines.push({
+        id: `dl-${courseId}-nodate-0`,
+        courseId,
+        courseName,
+        task,
+        dueDate: '',
+        urgency: 'upcoming',
+      })
+    }
+  }
+
+  return deadlines
 }
 
 export function scoreUrgency(dueDate: string): 'overdue' | 'soon' | 'upcoming' {
