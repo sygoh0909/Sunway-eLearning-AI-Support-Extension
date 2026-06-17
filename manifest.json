@@ -15,7 +15,14 @@
   "content_scripts": [
     {
       "matches": ["https://elearn.sunway.edu.my/*"],
-      "js": ["src/content/index.ts"]
+      "js": ["src/content/index.ts"],
+      "run_at": "document_idle" 
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/popup/index.html"],
+      "matches": ["https://elearn.sunway.edu.my/*"]
     }
   ]
 }
