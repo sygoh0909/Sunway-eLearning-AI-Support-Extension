@@ -62,11 +62,11 @@ export async function fetchCourses(): Promise<Course[]> {
     }
     const data = await res.json()
     const courses: Course[] = (data.results ?? [])
-      .filter((m: any) => m.course?.availability?.available === 'Yes')
+      .filter((m: any) => m.course?.isAvailable === true && !m.course?.isClosed)
       .map((m: any) => ({
         id:   m.courseId,
         name: m.course?.name ?? m.courseId,
-        url:  `${BASE_URL}/ultra/courses/${m.courseId}/outline`,
+        url:  m.course?.externalAccessUrl ?? `${BASE_URL}/ultra/courses/${m.courseId}/outline`,
       }))
     console.log(`[Scraper] fetchCourses: ${courses.length} courses`)
     return courses
