@@ -1,2 +1,3 @@
 // Detects enrolled courses from eLearn dashboard
-export {}
+import { fetchCourses } from '../utils/scraper'
+export { fetchCourses as detectCourses }
