@@ -1,4 +1,4 @@
-import type { Deadline } from './types'
+import type { Deadline, AnnouncementCategory } from './types'
 
 const DATE_PATTERNS = [
   // "due/deadline/submit/submission/register [date]: ..." patterns
@@ -178,4 +178,42 @@ export function scoreUrgency(dueDate: string): 'overdue' | 'soon' | 'upcoming' {
   if (diffDays < 0) return 'overdue'
   if (diffDays <= 3) return 'soon' // ≤3 days = soon
   return 'upcoming'
+}
+
+const DEADLINE_KEYWORDS = /\b(submit|submission|hand\s*in|turn\s*in|upload|assignment|coursework|group\s*(?:ing|work|project|formation)|form\s+group|team\s+formation|discussion\s+(?:board|post|forum)|requires?\s+submission|project|deadline|due\s*date)\b/i
+const EVENT_KEYWORDS = /\b(intern(?:ship)?|industrial\s+training|register|registration|event|workshop|seminar|competition|tournament|webinar|conference|talk|ceremony|trip|excursion|sign\s*up|enrol|career|recruit|hiring|job\s+fair|networking|co-?curricular|club|society|volunteer|committee|gathering|rsvp|election|council|festival|orientation|open\s+day|booth|charity|donate|donation|sponsor|ticket|cultural|sport|match|marathon|hackathon|bootcamp|campaign|concert|performance|exhibition|showcase|pickleball|badminton|football|basketball|run|walk)\b/i
+
+// Keywords that confirm it's actual coursework with a due submission
+const COURSEWORK_KEYWORDS = /\b(assignment\s*\d*\s*due|grouping\s*due|group\s*(?:ing|work|project|formation)|form\s+group|team\s+formation|discussion\s+(?:board|post|forum)|lab\s+report|project\s+report|submission|hand\s*in|turn\s*in|upload|assignment|coursework|due\s*date|deadline)\b/i
+
+// Non-subject sources — these are not real course modules
+const NON_SUBJECT_SOURCE = /\b(faculty|school\s+of|department\s+of|career|student\s+council|susc|student\s+affairs|alumni|fet\s+career|student\s+life|library|administration|registrar|finance|scholarship|bursary|housing|hostel|residential|counselling|wellness|health)\b/i
+
+export function categorizeAnnouncement(title: string, body: string, courseName = ''): AnnouncementCategory {
+  const text = `${title} ${body}`.toLowerCase()
+  const titleLower = title.toLowerCase()
+  const courseNameLower = courseName.toLowerCase()
+
+  const hasEvent = EVENT_KEYWORDS.test(text)
+  const hasDeadline = DEADLINE_KEYWORDS.test(text)
+  const hasCourseWork = COURSEWORK_KEYWORDS.test(text)
+  const fromNonSubject = NON_SUBJECT_SOURCE.test(courseNameLower)
+
+  // If from a non-subject source (faculty, school of, career, etc.) → Event
+  if (fromNonSubject) return 'Event'
+
+  // Title has event keywords → Event
+  if (EVENT_KEYWORDS.test(titleLower)) return 'Event'
+
+  // Coursework due/submission → Deadline
+  if (hasCourseWork) return 'Deadline'
+
+  // Event keywords in body
+  if (hasEvent) return 'Event'
+
+  // Deadline keywords without event context
+  if (hasDeadline) return 'Deadline'
+
+  // Default: Academic (from actual course module — class info, schedule, exams)
+  return 'Academic'
 }
