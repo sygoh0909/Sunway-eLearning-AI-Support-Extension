@@ -1,6 +1,7 @@
 import type {
   Course,
   Announcement,
+  Deadline,
   SummarisedAnnouncement,
   AppSettings
 } from './types'
@@ -9,6 +10,7 @@ export interface StorageSchema {
   courses: Course[]
   announcements: Announcement[]
   summarised: SummarisedAnnouncement[]
+  assignmentDeadlines: Deadline[]
   lastFetched: number
   settings: AppSettings
 }
@@ -37,7 +39,9 @@ export async function initStorage(): Promise<void> {
   if (!existing) {
     await storageSet('settings', {
       ollamaUrl: 'http://localhost:11434',
+      ollamaModel: 'llama3.2',
       refreshInterval: 60,
+      notificationsEnabled: true,
     })
   }
 }
