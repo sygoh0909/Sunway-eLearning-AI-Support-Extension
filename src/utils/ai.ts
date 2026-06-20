@@ -59,9 +59,82 @@ Announcement: ${truncated}
 Summary:`
 }
 
-export async function summarise(
-  announcements: Announcement[]
-): Promise<SummarisedAnnouncement[]> {
-  // TODO: Feature 1 implementation
-  return []
+export async function summarise(announcements: Announcement[]): Promise<SummarisedAnnouncement[]> {
+  const settings = await getSettings()
+  const results: SummarisedAnnouncement[] = []
+
+  const { connected } = await checkOllamaConnection()
+
+  for (const announcement of announcements) {
+    let summary = ''
+
+    if (connected) {
+      try {
+        const prompt = buildSummaryPrompt(announcement)
+        summary = await callOllama(prompt, settings.ollamaUrl, settings.ollamaModel)
+      } catch {
+        summary = generateFallbackSummary(announcement)
+      }
+    } else {
+      summary = generateFallbackSummary(announcement)
+    }
+
+    const deadlines = await extractDeadlines(
+      announcement.body,
+      announcement.courseId,
+      announcement.courseName
+    )
+
+    results.push({
+      ...announcement,
+      summary: summary || generateFallbackSummary(announcement),
+      deadlines,
+    })
+  }
+
+  return results
 }
+
+function generateFallbackSummary(announcement: Announcement): string {
+  let body = announcement.body.trim()
+  body = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim()
+
+  // Split into sentences
+  const sentences = body.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 0)
+
+  const isGreeting = (s: string) => /^(dear\s+|hi\s+|hello\s+|good\s+(morning|afternoon|evening|day)|greetings?)/i.test(s)
+  const isSignOff = (s: string) => /^(thank\s*you|regards|best\s+wishes|cheers|sincerely|stay\s+blessed|have\s+a\s+nice|have\s+a\s+good|all\s+the\s+best|good\s+luck|warm\s+regards)/i.test(s)
+  const isFiller = (s: string) => /^(please\s+be\s+informed|kindly\s+note|this\s+is\s+to\s+inform|i\s+would\s+like\s+to\s+inform)/i.test(s)
+
+  // Keep sentences that are not greetings, sign-offs, or pure filler
+  const kept = sentences.filter(s => !isGreeting(s) && !isSignOff(s) && !isFiller(s))
+
+  let summary = kept.join(' ')
+
+  // Clean inline filler phrases but keep the rest of the sentence
+  summary = summary.replace(/please\s+be\s+informed\s+that\s*/gi, '')
+  summary = summary.replace(/kindly\s+note\s+that\s*/gi, '')
+  summary = summary.replace(/this\s+is\s+to\s+inform\s+you\s+that\s*/gi, '')
+
+  summary = summary.replace(/\s+/g, ' ').trim()
+
+  if (summary.length > 300) {
+    summary = summary.slice(0, 300).replace(/\s+\S*$/, '') + '...'
+  }
+
+  return summary || announcement.title
+}
+
+export async function checkOllamaConnection(): Promise<{ connected: boolean; models: string[] }> {
+  const settings = await getSettings()
+  try {
+    const res = await fetch(`${settings.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(5000) })
+    if (!res.ok) return { connected: false, models: [] }
+    const data = await res.json()
+    const models = (data.models ?? []).map((m: any) => m.name)
+    return { connected: true, models }
+  } catch {
+    return { connected: false, models: [] }
+  }
+}
+
