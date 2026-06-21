@@ -14,10 +14,10 @@ function isElearnPage(): boolean {
 // checks DOM for logged-in elements vs login form
 function isLoggedIn(): boolean {
   const loggedInIndicators = document.querySelector(
-    '#main-content, [data-bbid="user-menu"], .bb-avatar, ...' +
+    '#main-content, [data-bbid="user-menu"], .bb-avatar, ' +
     '.usermenu, .logininfo a[href*="logout"], [data-region="drawer"]'
   )
-  const loginForm = document.querySelector('#login, .login-form, ...')
+  const loginForm = document.querySelector('#login, .login-form, form#login, .login-page')
   return !!loggedInIndicators && !loginForm
 }
 
