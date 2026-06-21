@@ -1,4 +1,7 @@
 // Entry point for the content script
+if (window.location.hostname === 'elearn.sunway.edu.my') {
+  console.log('[Sunway Extension] Content script loaded')
+}
 
 import { scrapeAllCourses } from '../utils/scraper'
 import { injectSidebar } from './sidebar'
@@ -11,10 +14,10 @@ function isElearnPage(): boolean {
 // checks DOM for logged-in elements vs login form
 function isLoggedIn(): boolean {
   const loggedInIndicators = document.querySelector(
-    '#main-content, [data-bbid="user-menu"], .bb-avatar, ...' +
+    '#main-content, [data-bbid="user-menu"], .bb-avatar, ' +
     '.usermenu, .logininfo a[href*="logout"], [data-region="drawer"]'
   )
-  const loginForm = document.querySelector('#login, .login-form, ...')
+  const loginForm = document.querySelector('#login, .login-form, form#login, .login-page')
   return !!loggedInIndicators && !loginForm
 }
 
@@ -54,11 +57,24 @@ function waitForLogin() {
   const observer = new MutationObserver(() => { 
     if (isLoggedIn() && !initialized) { 
       observer.disconnect()
+      init()
     } 
   })
 
   observer.observe(document.body, { childList: true, subtree: true })
+
   // also polls URL every 1s in case of SPA navigation
+  let lastUrl = location.href
+  const urlCheck = setInterval(() => {
+    if (location.href != lastUrl) {
+      lastUrl = location.href
+      if (isLoggedIn() && !initialized) {
+        clearInterval(urlCheck)
+        observer.disconnect()
+        init()
+      }
+    }
+  }, 1000)
 }
 
 // entry — runs on DOMContentLoaded or immediately if already loaded
@@ -67,5 +83,3 @@ if (document.readyState === 'loading') {
 } else {
   init()
 }
-
-export {}
