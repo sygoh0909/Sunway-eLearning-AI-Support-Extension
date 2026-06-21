@@ -362,12 +362,24 @@ function extractAssignmentItems(items: any[], course: Course): Deadline[] {
 
 // ─── Linked deadline extraction ───────────────────────────────────────────────
 
-/** Scans raw HTML for eLearn deep links (/ultra/courses/.../outline/assessment/...). */
+// matches deep links like /ultra/courses/_xxx/outline/assessment/_yyy
+// lecturers often embed these links in announcements to reference assignment pages
+const ELEARN_LINK_PATTERN = /https?:\/\/elearn\.sunway\.edu\.my\/ultra\/courses\/(_\w+)\/(?:outline\/(?:assessment|discussion)|grades\/assessment)\/(_\w+)/g
+
+/** Scans raw HTML + href attributes for eLearn deep links. Deduplicates by courseId|contentId. */
 function extractElearnLinks(text: string): Array<{ courseId: string; contentId: string }> {
+  const seen = new Set<string>()
   const links: Array<{ courseId: string; contentId: string }> = []
-  const pattern = /\/ultra\/courses\/([^/]+)\/outline\/(?:assessment|content)\/([^/"'\s]+)/g
+
+  const pattern = new RegExp(ELEARN_LINK_PATTERN.source, 'g')
+  const allText = text + ' ' + (text.match(pattern) || []).map(m => m.replace(/href=["']|["']/g, '')).join(' ')
+
   let match: RegExpExecArray | null
-  while ((match = pattern.exec(text)) !== null) {
+  ELEARN_LINK_PATTERN.lastIndex = 0
+  while ((match = ELEARN_LINK_PATTERN.exec(allText)) !== null) {
+    const key = `${match[1]}|${match[2]}`
+    if (!seen.has(key)) continue
+    seen.add(key)
     links.push({ courseId: match[1], contentId: match[2] })
   }
   return links
