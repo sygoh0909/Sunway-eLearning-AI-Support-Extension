@@ -1,98 +1,52 @@
 import { useEffect, useState } from 'react'
 import { storageGet, storageSet } from '../utils/storage'
-import { checkOllamaConnection } from '../utils/ai'
-import type { AppSettings } from '../utils/types'
+import type { AppSettings, NotificationTiming } from '../utils/types'
+
+const TIMING_OPTIONS: { value: NotificationTiming; label: string }[] = [
+  { value: '1day', label: '1 day before' },
+  { value: '3days', label: '3 days before' },
+  { value: '1week', label: '1 week before' },
+  { value: '2weeks', label: '2 weeks before' },
+]
 
 export default function SettingsTab() {
   const [settings, setSettings] = useState<AppSettings>({
-    ollamaUrl: 'http://localhost:11434',
-    ollamaModel: 'llama3.2',
     refreshInterval: 60,
     notificationsEnabled: true,
+    notificationTiming: ['1week'],
+    notificationTypes: {
+      deadlineReminders: true,
+      newAnnouncements: true,
+      urgentOnly: false,
+    },
   })
-  const [ollamaStatus, setOllamaStatus] = useState<'checking' | 'connected' | 'disconnected'>('checking')
-  const [availableModels, setAvailableModels] = useState<string[]>([])
   const [saved, setSaved] = useState(false)
 
   useEffect(() => {
     storageGet('settings').then((saved) => {
       if (saved) setSettings(s => ({ ...s, ...saved }))
     })
-    checkConnection()
   }, [])
-
-  async function checkConnection() {
-    setOllamaStatus('checking')
-    const result = await checkOllamaConnection()
-    setOllamaStatus(result.connected ? 'connected' : 'disconnected')
-    setAvailableModels(result.models)
-  }
 
   async function handleSave() {
     await storageSet('settings', settings)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
-    checkConnection()
+  }
+
+  function toggleTiming(timing: NotificationTiming) {
+    const current = settings.notificationTiming
+    const updated = current.includes(timing)
+      ? current.filter(t => t !== timing)
+      : [...current, timing]
+    setSettings({ ...settings, notificationTiming: updated })
   }
 
   return (
     <div className="space-y-4">
-      {/* Ollama Status */}
-      <div className="bg-white rounded-lg border border-gray-200 p-3">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-900">Ollama Status</span>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-            ollamaStatus === 'connected' ? 'bg-green-100 text-green-700' :
-            ollamaStatus === 'disconnected' ? 'bg-red-100 text-red-700' :
-            'bg-gray-100 text-gray-600'
-          }`}>
-            {ollamaStatus === 'checking' ? 'Checking...' :
-             ollamaStatus === 'connected' ? 'Connected' : 'Not Connected'}
-          </span>
-        </div>
-        {ollamaStatus === 'disconnected' && (
-          <p className="text-xs text-gray-500">
-            Make sure Ollama is running locally. Download from ollama.com
-          </p>
-        )}
-        {availableModels.length > 0 && (
-          <p className="text-xs text-gray-500">
-            Models: {availableModels.slice(0, 5).join(', ')}
-          </p>
-        )}
-      </div>
-
-      {/* Settings Form */}
+      {/* General Settings */}
       <div className="bg-white rounded-lg border border-gray-200 p-3 space-y-3">
-        <div>
-          <label className="text-xs font-medium text-gray-700">Ollama URL</label>
-          <input
-            className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm mt-1 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-            value={settings.ollamaUrl}
-            onChange={(e) => setSettings({ ...settings, ollamaUrl: e.target.value })}
-          />
-        </div>
-
-        <div>
-          <label className="text-xs font-medium text-gray-700">Model</label>
-          {availableModels.length > 0 ? (
-            <select
-              className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm mt-1 focus:ring-1 focus:ring-blue-500"
-              value={settings.ollamaModel}
-              onChange={(e) => setSettings({ ...settings, ollamaModel: e.target.value })}
-            >
-              {availableModels.map(m => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </select>
-          ) : (
-            <input
-              className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm mt-1 focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-              value={settings.ollamaModel}
-              onChange={(e) => setSettings({ ...settings, ollamaModel: e.target.value })}
-            />
-          )}
-        </div>
+        <span className="text-sm font-medium text-gray-900">General</span>
 
         <div>
           <label className="text-xs font-medium text-gray-700">Auto-refresh interval (minutes)</label>
@@ -104,19 +58,94 @@ export default function SettingsTab() {
             onChange={(e) => setSettings({ ...settings, refreshInterval: Math.max(5, Number(e.target.value)) })}
           />
         </div>
+      </div>
 
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="notifications"
-            checked={settings.notificationsEnabled}
-            onChange={(e) => setSettings({ ...settings, notificationsEnabled: e.target.checked })}
-            className="rounded border-gray-300"
-          />
-          <label htmlFor="notifications" className="text-xs font-medium text-gray-700">
-            Enable deadline notifications
-          </label>
+      {/* Notification Settings */}
+      <div className="bg-white rounded-lg border border-gray-200 p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium text-gray-900">Notifications</span>
+          <button
+            onClick={() => setSettings({ ...settings, notificationsEnabled: !settings.notificationsEnabled })}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+              settings.notificationsEnabled ? 'bg-blue-600' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                settings.notificationsEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+              }`}
+            />
+          </button>
         </div>
+
+        {settings.notificationsEnabled && (
+          <div className="space-y-3 pt-1">
+            {/* Notification Types */}
+            <div>
+              <label className="text-xs font-medium text-gray-700 mb-1.5 block">Notify me about</label>
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.notificationTypes.deadlineReminders}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      notificationTypes: { ...settings.notificationTypes, deadlineReminders: e.target.checked }
+                    })}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-xs text-gray-700">Upcoming deadline reminders</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.notificationTypes.newAnnouncements}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      notificationTypes: { ...settings.notificationTypes, newAnnouncements: e.target.checked }
+                    })}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-xs text-gray-700">New announcements</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={settings.notificationTypes.urgentOnly}
+                    onChange={(e) => setSettings({
+                      ...settings,
+                      notificationTypes: { ...settings.notificationTypes, urgentOnly: e.target.checked }
+                    })}
+                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-xs text-gray-700">Urgent items only</span>
+                </label>
+              </div>
+            </div>
+
+            {/* Reminder Timing */}
+            {settings.notificationTypes.deadlineReminders && (
+              <div>
+                <label className="text-xs font-medium text-gray-700 mb-1.5 block">Remind me before deadline</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {TIMING_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => toggleTiming(opt.value)}
+                      className={`px-2 py-1.5 text-xs rounded-md border transition-colors ${
+                        settings.notificationTiming.includes(opt.value)
+                          ? 'bg-blue-50 border-blue-300 text-blue-700 font-medium'
+                          : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <button

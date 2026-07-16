@@ -39,7 +39,6 @@ export default function AnnouncementCard({ announcement }: Props) {
         <div className="flex items-start justify-between gap-2 mb-1.5">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 mb-1">
-              {urgency && <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${URGENCY_CONFIG[urgency].dotColor}`} />}
               <h3 className="text-xs font-semibold text-gray-900 line-clamp-2">{announcement.title}</h3>
             </div>
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-gray-600">
@@ -71,7 +70,7 @@ export default function AnnouncementCard({ announcement }: Props) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
             </svg>
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-medium text-blue-900 mb-0.5">AI Summary</p>
+              <p className="text-[10px] font-medium text-blue-900 mb-0.5">Summary</p>
               <p className="text-[11px] text-gray-700 leading-relaxed">{cleanText(announcement.summary)}</p>
             </div>
           </div>
@@ -105,7 +104,7 @@ export default function AnnouncementCard({ announcement }: Props) {
             <span>{announcement.courseName}</span>
           </div>
           <a
-            href={`https://elearn.sunway.edu.my/ultra/courses/${announcement.courseId}/announcements/announcement-detail?courseId=${announcement.courseId}&announcementId=${announcement.id}`}
+            href={announcement.linkUrl || `https://elearn.sunway.edu.my/ultra/courses/${announcement.courseId}/announcements/announcement-detail?courseId=${announcement.courseId}&announcementId=${announcement.id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-0.5 px-2 py-0.5 bg-blue-600 text-white text-[11px] font-medium rounded hover:bg-blue-700 transition-colors flex-shrink-0"
