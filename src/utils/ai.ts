@@ -1,140 +1,222 @@
 import type { Announcement, SummarisedAnnouncement } from './types'
-import { getSettings } from './storage'
-import { extractDeadlines } from './deadlines'
+import { extractDeadlines, scoreUrgency, categorizeAnnouncement, computePriorityScore } from './deadlines'
+import { storageGet } from './storage'
 
-async function callOllama(prompt: string, ollamaUrl: string, model: string): Promise<string> {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 30000)
 
-  try {
-    const response = await fetch(`${ollamaUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model,
-        prompt,
-        stream: false,
-        options: { temperature: 0.3, num_predict: 120 },
-      }),
-      signal: controller.signal,
-    })
+const STOP_WORDS = new Set([
+  'a','an','the','is','are','was','were','be','been','being','have','has','had',
+  'do','does','did','will','would','could','should','may','might','shall','can',
+  'to','of','in','for','on','with','at','by','from','as','into','through','during',
+  'before','after','above','below','between','out','off','over','under','again',
+  'further','then','once','here','there','when','where','why','how','all','each',
+  'every','both','few','more','most','other','some','such','no','nor','not','only',
+  'own','same','so','than','too','very','just','because','but','and','or','if',
+  'while','about','against','this','that','these','those','it','its','i','me','my',
+  'we','our','you','your','he','him','his','she','her','they','them','their','what',
+  'which','who','whom','please','kindly','note','dear','regards','thank','thanks'
+])
 
-    if (!response.ok) {
-      throw new Error(`Ollama returned ${response.status}`)
-    }
+function tokenize(text: string): string[] {
+  return text.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 1 && !STOP_WORDS.has(w))
+}
 
-    const data = await response.json()
-    return data.response?.trim() ?? ''
-  } finally {
-    clearTimeout(timeout)
+function cosineSimilarity(a: string[], b: string[]): number {
+  const freqA: Record<string, number> = {}
+  const freqB: Record<string, number> = {}
+  for (const w of a) freqA[w] = (freqA[w] || 0) + 1
+  for (const w of b) freqB[w] = (freqB[w] || 0) + 1
+
+  const allWords = new Set([...Object.keys(freqA), ...Object.keys(freqB)])
+  let dot = 0, magA = 0, magB = 0
+  for (const w of allWords) {
+    const va = freqA[w] || 0
+    const vb = freqB[w] || 0
+    dot += va * vb
+    magA += va * va
+    magB += vb * vb
   }
+  const mag = Math.sqrt(magA) * Math.sqrt(magB)
+  return mag === 0 ? 0 : dot / mag
 }
 
-function buildSummaryPrompt(announcement: Announcement): string {
-  const body = announcement.body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim()
-  const truncated = body.length > 600 ? body.slice(0, 600) : body
-  return `You are a student assistant. Extract the important content from this announcement. Keep the original wording but remove all fluff.
+function sentenceBoost(sentence: string): number {
+  let boost = 0
+  const s = sentence.toLowerCase()
 
-REMOVE:
-- Greetings: "Dear students", "Hi all", "Good morning"
-- Sign-offs: "Thank you", "Regards", "Stay blessed", "Have a nice day"
-- Filler: "Please be informed that", "Kindly note that", "This is to inform you"
+  if (/\d{1,2}[\s\-\/](jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*[\s\-\/,]?\s*\d{0,4}/i.test(sentence)) boost += 1.5
+  if (/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}/i.test(sentence)) boost += 1.5
+  if (/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/.test(sentence)) boost += 1.5
+  if (/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(sentence)) boost += 0.8
+  if (/\bweek\s*\d+/i.test(sentence)) boost += 0.8
 
-KEEP (in original wording):
-- What's happening (test, submission, event, class change)
-- Requirements (bring laptop, prepare, etc.)
-- Warnings (no retake, no late submission, etc.)
-- Dates, times, locations
+  if (/\d{1,2}[:.]\d{2}\s*(am|pm)?/i.test(sentence)) boost += 0.8
+  if (/\d{1,2}\s*(am|pm)\b/i.test(sentence)) boost += 0.8
 
-EXAMPLES:
-Original: "Dear Students, Please note that the mock test will be conducted during your regular class hours in the classroom. All students are required to bring their laptops and ensure that they are fully charged before coming to class. Please be informed that no retake, makeup test, or any other excuse will be entertained in case of absence or lack of preparation. Therefore, you are advised to make all necessary arrangements and be fully prepared in advance. Thank you, and stay blessed. Have a nice day!"
-Summary: "Mock test will be conducted during regular class hours in classroom. All students are required to bring their laptops and ensure they are fully charged. No retake, makeup test, or any excuse will be entertained in case of absence or lack of preparation. Make all necessary arrangements and be fully prepared in advance."
+  if (/\b(deadline|due\s*date|submit\s*by|submission|due\s+on|due\s+by|latest\s+by|no\s+later\s+than)\b/i.test(sentence)) boost += 2.0
 
-Original: "Hi all, there will be no class this Thursday 12 June due to public holiday. The replacement class will be on Saturday 14 June, 10am-12pm at room 3.12. Please be there on time. Thank you."
-Summary: "No class this Thursday 12 June due to public holiday. Replacement class on Saturday 14 June, 10am-12pm at room 3.12. Please be there on time."
+  if (/\b(assignment|quiz|exam|test|assessment|project|presentation|lab\s*report|tutorial|midterm|final)\b/i.test(sentence) && sentence.length > 40) boost += 1.5
 
-Title: ${announcement.title}
-Announcement: ${truncated}
+  if (/\b(event|workshop|seminar|webinar|talk|session|ceremony|competition|conference|meeting|orientation)\b/i.test(sentence)) boost += 1.2
 
-Summary:`
+  if (/\b(venue|location|room|hall|auditorium|building|block|level|campus)\b/i.test(sentence)) boost += 0.8
+
+  if (/\b(register|sign\s*up|enrol|submit|attend|complete|upload|download|fill\s*(in|out|up))\b/i.test(sentence)) boost += 1.0
+
+  if (/\b(urgent|important|mandatory|compulsory|required|immediately|asap|reminder)\b/i.test(s)) boost += 1.2
+
+  return boost
 }
 
-export async function summarise(announcements: Announcement[]): Promise<SummarisedAnnouncement[]> {
-  const settings = await getSettings()
-  const results: SummarisedAnnouncement[] = []
+function textRank(sentences: string[], topN: number): string[] {
+  if (sentences.length <= topN) return sentences
 
-  const { connected } = await checkOllamaConnection()
+  const tokens = sentences.map(s => tokenize(s))
+  const n = sentences.length
+  const matrix: number[][] = Array.from({ length: n }, () => Array(n).fill(0))
 
-  for (const announcement of announcements) {
-    let summary = ''
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const sim = cosineSimilarity(tokens[i], tokens[j])
+      matrix[i][j] = sim
+      matrix[j][i] = sim
+    }
+  }
 
-    if (connected) {
-      try {
-        const prompt = buildSummaryPrompt(announcement)
-        summary = await callOllama(prompt, settings.ollamaUrl, settings.ollamaModel)
-      } catch {
-        summary = generateFallbackSummary(announcement)
+  const damping = 0.85
+  const iterations = 30
+  let scores = Array(n).fill(1 / n)
+
+  for (let iter = 0; iter < iterations; iter++) {
+    const newScores = Array(n).fill(0)
+    for (let i = 0; i < n; i++) {
+      let sum = 0
+      for (let j = 0; j < n; j++) {
+        if (i === j) continue
+        const outSum = matrix[j].reduce((a, b) => a + b, 0)
+        if (outSum > 0) sum += (matrix[j][i] / outSum) * scores[j]
       }
-    } else {
-      summary = generateFallbackSummary(announcement)
+      newScores[i] = (1 - damping) / n + damping * sum
     }
-
-    const deadlines = await extractDeadlines(
-      announcement.body,
-      announcement.courseId,
-      announcement.courseName
-    )
-
-    results.push({
-      ...announcement,
-      summary: summary || generateFallbackSummary(announcement),
-      deadlines,
-    })
+    scores = newScores
   }
 
-  return results
+  for (let i = 0; i < n; i++) {
+    const boost = sentenceBoost(sentences[i])
+    const positionBias = i < 3 ? 0.3 : 0
+    const lengthPenalty = (sentences[i].length < 40 && boost < 1.5) ? 0.3 : 1
+    scores[i] *= (1 + boost + positionBias) * lengthPenalty
+  }
+
+  const ranked = scores.map((score, idx) => ({ score, idx }))
+  ranked.sort((a, b) => b.score - a.score)
+
+  const topIndices = ranked.slice(0, topN).map(r => r.idx)
+  topIndices.sort((a, b) => a - b)
+
+  return topIndices.map(i => sentences[i])
 }
 
-function generateFallbackSummary(announcement: Announcement): string {
+function generateSummary(announcement: Announcement): string {
   let body = announcement.body.trim()
   body = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim()
 
-  // Split into sentences
-  const sentences = body.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 0)
+  const sentences = body.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 10)
 
   const isGreeting = (s: string) => /^(dear\s+|hi\s+|hello\s+|good\s+(morning|afternoon|evening|day)|greetings?)/i.test(s)
   const isSignOff = (s: string) => /^(thank\s*you|regards|best\s+wishes|cheers|sincerely|stay\s+blessed|have\s+a\s+nice|have\s+a\s+good|all\s+the\s+best|good\s+luck|warm\s+regards)/i.test(s)
   const isFiller = (s: string) => /^(please\s+be\s+informed|kindly\s+note|this\s+is\s+to\s+inform|i\s+would\s+like\s+to\s+inform)/i.test(s)
 
-  // Keep sentences that are not greetings, sign-offs, or pure filler
   const kept = sentences.filter(s => !isGreeting(s) && !isSignOff(s) && !isFiller(s))
 
-  let summary = kept.join(' ')
+  if (kept.length === 0) return announcement.title
 
-  // Clean inline filler phrases but keep the rest of the sentence
+  const topSentences = textRank(kept, 3)
+  let summary = topSentences.join(' ')
+
   summary = summary.replace(/please\s+be\s+informed\s+that\s*/gi, '')
   summary = summary.replace(/kindly\s+note\s+that\s*/gi, '')
   summary = summary.replace(/this\s+is\s+to\s+inform\s+you\s+that\s*/gi, '')
-
   summary = summary.replace(/\s+/g, ' ').trim()
 
-  if (summary.length > 300) {
-    summary = summary.slice(0, 300).replace(/\s+\S*$/, '') + '...'
+  if (summary.length > 350) {
+    summary = summary.slice(0, 350).replace(/\s+\S*$/, '') + '...'
   }
 
   return summary || announcement.title
 }
 
-export async function checkOllamaConnection(): Promise<{ connected: boolean; models: string[] }> {
-  const settings = await getSettings()
-  try {
-    const res = await fetch(`${settings.ollamaUrl}/api/tags`, { signal: AbortSignal.timeout(5000) })
-    if (!res.ok) return { connected: false, models: [] }
-    const data = await res.json()
-    const models = (data.models ?? []).map((m: any) => m.name)
-    return { connected: true, models }
-  } catch {
-    return { connected: false, models: [] }
-  }
-}
+export async function summarise(announcements: Announcement[]): Promise<SummarisedAnnouncement[]> {
+  const results: SummarisedAnnouncement[] = []
 
+  const existing: SummarisedAnnouncement[] = (await storageGet('summarised')) ?? []
+  const existingMap = new Map(existing.map(s => [s.id, s]))
+
+  const uncached: Announcement[] = []
+  for (const announcement of announcements) {
+    const cached = existingMap.get(announcement.id)
+    if (cached?.summary) {
+      const cachedDeadlines = cached.deadlines ?? []
+      const category = categorizeAnnouncement(announcement.title, announcement.body, announcement.courseName)
+      const priorityScore = computePriorityScore({ ...announcement, deadlines: cachedDeadlines })
+      results.push({ ...announcement, summary: cached.summary, deadlines: cachedDeadlines, category, priorityScore })
+    } else {
+      uncached.push(announcement)
+    }
+  }
+
+  console.log(`[AI] ${results.length} cached, ${uncached.length} need summarisation`)
+
+  for (const announcement of uncached) {
+    const summary = generateSummary(announcement)
+
+    const rawDate = announcement.date || ''
+    const isoDate = rawDate.includes('T') ? rawDate.split('T')[0] : rawDate
+
+    let deadlines: Awaited<ReturnType<typeof extractDeadlines>> = []
+
+    if (announcement.dateType === 'due' && isoDate) {
+      deadlines.push({
+        id: `dl-ann-${announcement.courseId}-${announcement.id}`,
+        courseId: announcement.courseId,
+        courseName: announcement.courseName,
+        task: announcement.title,
+        dueDate: isoDate,
+        urgency: scoreUrgency(isoDate),
+      })
+    } else {
+      deadlines = await extractDeadlines(
+        announcement.body,
+        announcement.courseId,
+        announcement.courseName
+      )
+      const firstWithDate = deadlines.find(d => d.dueDate)
+      if (firstWithDate) {
+        announcement.date = firstWithDate.dueDate
+        announcement.dateType = 'due'
+      }
+    }
+
+    if (deadlines.length === 0) {
+      let urgency: 'overdue' | 'soon' | 'upcoming' = 'upcoming'
+      if (isoDate) {
+        const posted = new Date(isoDate).getTime()
+        const threeMonthsAgo = Date.now() - 90 * 24 * 60 * 60 * 1000
+        if (posted < threeMonthsAgo) urgency = 'overdue'
+      }
+      deadlines.push({
+        id: `dl-ann-${announcement.courseId}-${announcement.id}`,
+        courseId: announcement.courseId,
+        courseName: announcement.courseName,
+        task: announcement.title,
+        dueDate: '',
+        urgency,
+      })
+    }
+
+    const category = categorizeAnnouncement(announcement.title, announcement.body, announcement.courseName)
+    const priorityScore = computePriorityScore({ ...announcement, deadlines })
+    results.push({ ...announcement, summary, deadlines, category, priorityScore })
+  }
+
+  return results
+}
