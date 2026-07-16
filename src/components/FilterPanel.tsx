@@ -29,6 +29,7 @@ const CATEGORY_COLORS: Record<AnnouncementCategory, string> = {
   Deadline: 'bg-red-50 text-red-700 border-red-200',
   Academic: 'bg-blue-50 text-blue-700 border-blue-200',
   Event: 'bg-purple-50 text-purple-700 border-purple-200',
+  Administrative: 'bg-gray-50 text-gray-700 border-gray-200',
 }
 
 function cycleFilter(current: FilterState | undefined): FilterState | undefined {
