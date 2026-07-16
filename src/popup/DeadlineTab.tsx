@@ -99,12 +99,25 @@ export default function DeadlineTab() {
           </div>
           <div className="flex items-center justify-between mt-2 pt-2 border-t border-gray-100">
             <span className="text-xs text-gray-500">{formatDate(deadline.dueDate)}</span>
-            <span className={`text-xs font-medium ${
-              deadline.urgency === 'soon' ? 'text-red-600' :
-              deadline.urgency === 'upcoming' ? 'text-yellow-600' : 'text-green-600'
-            }`}>
-              {getDaysLeft(deadline.dueDate)}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className={`text-xs font-medium ${
+                deadline.urgency === 'soon' ? 'text-red-600' :
+                deadline.urgency === 'upcoming' ? 'text-yellow-600' : 'text-green-600'
+              }`}>
+                {getDaysLeft(deadline.dueDate)}
+              </span>
+              <a
+                href={deadline.contentId
+                  ? `https://elearn.sunway.edu.my/ultra/stream/assessment/${deadline.contentId}/overview?courseId=${deadline.courseId}`
+                  : `https://elearn.sunway.edu.my/ultra/courses/${deadline.courseId}/outline`
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-[10px] px-1.5 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                View
+              </a>
+            </div>
           </div>
         </div>
       ))}
