@@ -4,7 +4,12 @@
   "version": "1.0.0",
   "description": "AI-powered eLearn announcement aggregator",
   "permissions": ["storage", "activeTab", "scripting", "notifications", "alarms"],
-  "host_permissions": ["https://elearn.sunway.edu.my/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "host_permissions": [
+    "https://elearn.sunway.edu.my/*"
+  ],
   "action": {
     "default_popup": "src/popup/index.html"
   },
@@ -15,7 +20,14 @@
   "content_scripts": [
     {
       "matches": ["https://elearn.sunway.edu.my/*"],
-      "js": ["src/content/index.ts"]
+      "js": ["src/content/index.ts"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/popup/index.html"],
+      "matches": ["https://elearn.sunway.edu.my/*"]
     }
   ]
 }

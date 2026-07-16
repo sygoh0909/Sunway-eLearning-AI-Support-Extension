@@ -1,9 +1,10 @@
 export interface Course {
-  id: string
-  name: string
-  url: string
+  id: string    
+  name: string 
+  url: string 
 }
 
+/** Announcment page */
 export interface Announcement {
   id: string
   courseId: string
@@ -17,6 +18,7 @@ export interface Announcement {
   isAssignment?: boolean
 }
 
+/** Assignment or gradebook item with a due date */
 export interface Deadline {
   id: string
   courseId: string
@@ -45,6 +47,7 @@ export interface NotificationPreferences {
   urgentOnly: boolean
 }
 
+/** User-configurable settings stored in chrome.storage */
 export interface AppSettings {
   refreshInterval: number
   notificationsEnabled: boolean
@@ -61,6 +64,7 @@ export const URGENCY_CONFIG: Record<Urgency, { label: string; color: string; dot
   upcoming: { label: 'Upcoming', color: 'bg-yellow-100 text-yellow-700 border-yellow-300', dotColor: 'bg-yellow-500' },
 }
 
+/** Message types used between content script, background service worker, and popup. */
 export type MessageType =
   | 'ANNOUNCEMENTS_SCRAPED'
   | 'SUMMARISED_READY'
