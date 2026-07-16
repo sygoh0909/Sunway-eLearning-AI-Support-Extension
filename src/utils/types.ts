@@ -34,6 +34,8 @@ export interface Deadline {
 export interface SummarisedAnnouncement extends Announcement {
   summary: string
   deadlines: Deadline[]
+  category: AnnouncementCategory
+  priorityScore: number
 }
 
 /** User-configurable settings stored in chrome.storage */
