@@ -1,5 +1,4 @@
-import { initStorage, storageSet, getSettings } from '../utils/storage'
-import { summarise } from '../utils/ai'
+import { initStorage, storageSet, storageGet, getSettings } from '../utils/storage'
 import { setupDeadlineAlarm } from './deadlineTracker'
 import './notification'
 import type { ChromeMessage } from '../utils/types'
@@ -76,8 +75,24 @@ async function handleScrapeResult(data: { courses: any[]; announcements: any[]; 
 
     if (announcements.length > 0) {
       await storageSet('announcements', announcements)
-      const results = await summarise(announcements)
-      await storageSet('summarised', results)
+
+      // Summarise in the eLearn tab so window.ai (Chrome Built-in AI) is available
+      const tabId = await findElearnTabId()
+      let summarised = null
+      if (tabId) {
+        try {
+          const res = await chrome.tabs.sendMessage(tabId, { type: 'DO_SUMMARISE', data: announcements })
+          if (res?.success) summarised = res.data
+        } catch {}
+      }
+
+      // Fallback: import summarise dynamically if tab is unavailable
+      if (!summarised) {
+        const { summarise } = await import('../utils/ai')
+        summarised = await summarise(announcements)
+      }
+
+      await storageSet('summarised', summarised)
       await storageSet('lastFetched', Date.now())
       setupDeadlineAlarm()
       return { success: true, count: announcements.length }
@@ -104,3 +119,4 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 setupPeriodicScrape()
 
 export {}
+
