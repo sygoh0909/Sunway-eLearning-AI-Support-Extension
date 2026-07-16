@@ -1,522 +1,605 @@
-// REST API scraper for Blackboard Ultra eLearn
-
 import type { Course, Announcement, Deadline } from './types'
 import { scoreUrgency } from './deadlines'
-// NOTE: scoreUrgency lives in SY's deadlines.ts — wait for sy-ai-summarizer-v2 to merge before raising PR
 
 const BASE_URL = 'https://elearn.sunway.edu.my'
+const FETCH_TIMEOUT = 15000
+const CONCURRENCY = 3
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
+function fetchWithTimeout(url: string, opts?: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT)
+  return fetch(url, { ...opts, signal: controller.signal }).finally(() => clearTimeout(timer))
+}
 
-/** Converts an HTML string to plain text using a temporary DOM element. */
+async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const results: T[] = []
+  let index = 0
+
+  async function worker() {
+    while (index < tasks.length) {
+      const i = index++
+      results[i] = await tasks[i]()
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker())
+  await Promise.all(workers)
+  return results
+}
+
 function toPlainText(value: string): string {
   const div = document.createElement('div')
   div.innerHTML = value
-  return (div.textContent ?? div.innerText ?? '').replace(/\s+/g, ' ').trim()
+  return div.textContent?.trim() ?? ''
 }
 
-/** Handles string / object / null body — always returns clean plain text. */
 function stripHtml(html: unknown): string {
   if (!html) return ''
-  if (typeof html === 'string') return toPlainText(html)
-  if (typeof html === 'object') {
+  if (typeof html === 'string') {
+    return toPlainText(html)
+  }
+  if (typeof html === 'object' && html !== null) {
     const obj = html as Record<string, unknown>
-    const raw = obj.rawText ?? obj.displayText ?? obj.text ?? ''
-    return typeof raw === 'string' ? toPlainText(raw) : ''
+    if (typeof obj.rawText === 'string') return toPlainText(obj.rawText)
+    if (typeof obj.text === 'string') return toPlainText(obj.text)
+    if (typeof obj.displayText === 'string') return toPlainText(obj.displayText)
+    return ''
   }
-  return ''
+  return String(html)
 }
 
-const KNOWN_DATE_FIELDS = [
-  'created', 'modified', 'postedDate', 'startDate',
-  'endDate', 'dueDate', 'availableFrom', 'availableUntil', 'lastModified',
-]
-
-/** Tries known date fields first, then scans ALL properties for ISO date strings. */
 function extractDate(item: any): string {
-  for (const field of KNOWN_DATE_FIELDS) {
-    const val = item[field]
+  const knownFields = [
+    item.created,
+    item.modified,
+    item.postedDate,
+    item.startDate,
+    item.startDateTime,
+    item.endDateTime,
+    item.availability?.adaptiveRelease?.start,
+    item.availability?.available,
+    item.datePosted,
+    item.publishDate,
+  ]
+  for (const val of knownFields) {
+    if (typeof val === 'string' && val.length > 0) return val
+    if (typeof val === 'number' && val > 0) return new Date(val).toISOString()
+  }
 
-    if (typeof val === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(val)) return val
+  // Scan all properties for ISO date strings (e.g. "2026-05-31T...")
+  const isoPattern = /^\d{4}-\d{2}-\d{2}T/
+  for (const key of Object.keys(item)) {
+    const val = item[key]
+    if (typeof val === 'string' && isoPattern.test(val)) return val
   }
-  
-  for (const value of Object.values(item)) {
-    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(value)) return value
-  }
-  console.warn('[Scraper] extractDate: no date found on item', item?.id ?? '(no id)')
+
+  console.log('[Sunway Extension] No date found in announcement item, keys:', Object.keys(item))
   return ''
 }
 
-// ─── Course fetching ──────────────────────────────────────────────────────────
-
-/** Fetches enrolled courses. Falls back to fetchCoursesFromStream() if memberships endpoint fails. */
 export async function fetchCourses(): Promise<Course[]> {
+  const courses: Course[] = []
+
   try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/users/me/memberships?expand=course&limit=100`,
-      { credentials: 'include' }
-    )
-    if (!res.ok) {
-      console.warn(`[Scraper] fetchCourses: memberships returned ${res.status}, falling back`)
-      return fetchCoursesFromStream()
+    const res = await fetchWithTimeout(`${BASE_URL}/learn/api/v1/users/me/memberships?expand=course&limit=100`, {
+      credentials: 'include',
+    })
+    if (!res.ok) return courses
+
+    const data = await res.json()
+    const results: any[] = data.results ?? []
+
+    for (const membership of results) {
+      const course = membership.course
+      if (!course || !course.isAvailable) continue
+
+      courses.push({
+        id: course.id,
+        name: course.name ?? course.courseId ?? `Course ${course.id}`,
+        url: `${BASE_URL}/ultra/courses/${course.id}/outline`,
+      })
     }
-    const data = await res.json()
-    const courses: Course[] = (data.results ?? [])
-      .filter((m: any) => m.course?.isAvailable === true && !m.course?.isClosed)
-      .map((m: any) => ({
-        id:   m.courseId,
-        name: m.course?.name ?? m.courseId,
-        url:  m.course?.externalAccessUrl ?? `${BASE_URL}/ultra/courses/${m.courseId}/outline`,
-      }))
-    console.log(`[Scraper] fetchCourses: ${courses.length} courses`)
-    return courses
-  } catch (e) {
-    console.warn('[Scraper] fetchCourses threw, falling back:', e)
-    return fetchCoursesFromStream()
+  } catch {
+    const fallbackCourses = await fetchCoursesFromStream()
+    courses.push(...fallbackCourses)
   }
+
+  return courses
 }
 
-/** Fallback — calls /users/me/courses when the memberships endpoint is unavailable. */
 async function fetchCoursesFromStream(): Promise<Course[]> {
+  const courses: Course[] = []
+
   try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/users/me/courses?limit=100`,
-      { credentials: 'include' }
-    )
-    if (!res.ok) throw new Error(`courses endpoint returned ${res.status}`)
+    const res = await fetchWithTimeout(`${BASE_URL}/learn/api/v1/users/me/courses?limit=100`, {
+      credentials: 'include',
+    })
+    if (!res.ok) return courses
+
     const data = await res.json()
-    return (data.results ?? []).map((c: any) => ({
-      id:   c.id,
-      name: c.name ?? c.id,
-      url:  `${BASE_URL}/ultra/courses/${c.id}/outline`,
-    }))
-  } catch (e) {
-    console.error('[Scraper] fetchCoursesFromStream failed:', e)
-    return []
-  }
+    const results: any[] = data.results ?? []
+
+    for (const course of results) {
+      if (!course.isAvailable) continue
+      courses.push({
+        id: course.id,
+        name: course.name ?? course.courseId ?? `Course ${course.id}`,
+        url: `${BASE_URL}/ultra/courses/${course.id}/outline`,
+      })
+    }
+  } catch {}
+
+  return courses
 }
 
-// ─── Announcement helpers ─────────────────────────────────────────────────────
-
-/** Extracts raw HTML from item.body — stored as rawBody on Announcement for link extraction. */
 function getRawBodyHtml(item: any): string {
-  const body = item.body
-  if (!body) return ''
-  if (typeof body === 'string') return body
-  if (typeof body === 'object') {
-    return (body as any).rawText ?? (body as any).displayText ?? (body as any).text ?? ''
+  if (!item.body) return ''
+  if (typeof item.body === 'string') return item.body
+  if (typeof item.body === 'object') {
+    const obj = item.body as Record<string, unknown>
+    if (typeof obj.rawText === 'string') return obj.rawText
+    if (typeof obj.text === 'string') return obj.text
+    if (typeof obj.displayText === 'string') return obj.displayText
   }
   return ''
 }
 
-// ─── Announcement fetching ────────────────────────────────────────────────────
-
-/** Fetches announcements for one course. Falls back to fetchFromContentItems() if 0 results. */
 export async function fetchAnnouncements(course: Course): Promise<Announcement[]> {
+  const announcements: Announcement[] = []
+
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${BASE_URL}/learn/api/v1/courses/${course.id}/announcements?limit=20`,
       { credentials: 'include' }
     )
-    if (!res.ok) {
-      console.warn(`[Scraper] fetchAnnouncements: ${course.name} → ${res.status}`)
-      return []
-    }
+    if (!res.ok) return announcements
+
     const data = await res.json()
-    const results = data.results ?? []
-    if (results.length === 0) {
-      console.log(`[Scraper] fetchAnnouncements: 0 for ${course.name}, trying content items`)
-      return fetchFromContentItems(course)
+    const results: any[] = data.results ?? []
+
+    for (const item of results) {
+      const rawBody = getRawBodyHtml(item)
+      const body = stripHtml(item.body)
+      const title = typeof item.title === 'string' ? item.title : 'Untitled Announcement'
+      const date = extractDate(item)
+      announcements.push({
+        id: item.id ?? `${course.id}-ann-${announcements.length}`,
+        courseId: course.id,
+        courseName: course.name,
+        title,
+        body: body || title,
+        rawBody,
+        date: date || 'Unknown',
+      })
     }
-    return results.map((item: any) => ({
-      id:         item.id,
-      courseId:   course.id,
-      courseName: course.name,
-      title:      item.title ?? '',
-      body:       stripHtml(item.body),
-      rawBody:    getRawBodyHtml(item),
-      date:       extractDate(item),
-      dateType:   'posted' as const,
-    }))
   } catch (e) {
-    console.warn(`[Scraper] fetchAnnouncements failed for ${course.name}:`, e)
-    return []
+    console.warn(`[Sunway Extension] Failed to fetch announcements for ${course.name}:`, e)
   }
+
+  if (announcements.length === 0) {
+    const forumAnnouncements = await fetchFromContentItems(course)
+    announcements.push(...forumAnnouncements)
+  }
+
+  return announcements
 }
 
-/** Fallback — scans /contents for announcement-type items when announcements endpoint is empty. */
 async function fetchFromContentItems(course: Course): Promise<Announcement[]> {
-  const ANNOUNCEMENT_TYPES = [
-    'resource/x-bb-announcement',
-    'resource/x-bb-bltiplacement-Portal',
-  ]
+  const announcements: Announcement[] = []
+
   try {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${BASE_URL}/learn/api/v1/courses/${course.id}/contents?limit=50`,
       { credentials: 'include' }
     )
-    if (!res.ok) return []
+    if (!res.ok) return announcements
+
     const data = await res.json()
-    return (data.results ?? [])
-      .filter((item: any) => ANNOUNCEMENT_TYPES.includes(item.contentHandler?.id ?? ''))
-      .map((item: any) => ({
-        id:         item.id,
-        courseId:   course.id,
-        courseName: course.name,
-        title:      item.title ?? '',
-        body:       stripHtml(item.body),
-        rawBody:    getRawBodyHtml(item),
-        date:       extractDate(item),
-        dateType:   'posted' as const,
-      }))
-  } catch (e) {
-    console.warn(`[Scraper] fetchFromContentItems failed for ${course.name}:`, e)
-    return []
-  }
+    const results: any[] = data.results ?? []
+
+    for (const item of results) {
+      if (item.contentHandler?.id === 'resource/x-bb-announcement' ||
+          item.contentHandler?.id === 'resource/x-bb-forumlink' ||
+          item.title?.toLowerCase().includes('announcement')) {
+        const body = stripHtml(item.body)
+        const title = typeof item.title === 'string' ? item.title : 'Untitled'
+        const date = extractDate(item)
+        announcements.push({
+          id: item.id ?? `${course.id}-content-${announcements.length}`,
+          courseId: course.id,
+          courseName: course.name,
+          title,
+          body: body || title,
+          date: date || 'Unknown',
+        })
+      }
+    }
+  } catch {}
+
+  return announcements
 }
 
-// ─── Assignment deadlines from gradebook ─────────────────────────────────────
-
-/** Fetches gradebook columns with due dates. Skips auto-calculated columns (Total, Weighted Total). */
 export async function fetchAssignmentDeadlines(course: Course): Promise<Deadline[]> {
-  const SKIP_TITLES = ['total', 'weighted total', 'final grade']
+  const deadlines: Deadline[] = []
 
   try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/courses/${course.id}/gradebook/columns?limit=50`,
-      { credentials: 'include' }
-    )
+    let url: string | null = `${BASE_URL}/learn/api/v1/courses/${course.id}/gradebook/columns?limit=100`
 
-    if (!res.ok) {
-      console.warn(`[Scraper] fetchAssignmentDeadlines: ${course.name} → ${res.status}`)
-      return []
+    while (url) {
+      const res = await fetchWithTimeout(url, { credentials: 'include' })
+      if (!res.ok) break
+
+      const data = await res.json()
+      const results: any[] = data.results ?? []
+
+      for (const col of results) {
+        if (col.score?.possible === undefined && !col.contentId) continue
+
+        let task = col.name ?? col.title ?? ''
+
+        if (!task && col.contentId) {
+          task = await fetchContentTitle(course.id, col.contentId)
+        }
+        if (!task) task = 'Assignment'
+
+        const dueDate = col.dueDate ?? col.grading?.due ?? ''
+        const isoDate = dueDate
+          ? (typeof dueDate === 'string' ? dueDate.split('T')[0] : new Date(dueDate).toISOString().split('T')[0])
+          : ''
+
+        const created = col.created ?? col.modified ?? ''
+        const createdDate = created
+          ? (typeof created === 'string' ? created : new Date(created).toISOString())
+          : ''
+
+        deadlines.push({
+          id: `dl-gb-${course.id}-${col.id}`,
+          courseId: course.id,
+          courseName: course.name,
+          task,
+          dueDate: isoDate,
+          createdDate,
+          contentId: col.contentId ?? col.id,
+          urgency: scoreUrgency(isoDate),
+        })
+      }
+
+      url = data.paging?.nextPage ? `${BASE_URL}${data.paging.nextPage}` : null
     }
-
-    const data = await res.json()
-    const deadlines: Deadline[] = []
-
-    for (const col of data.results ?? []) {
-      if (SKIP_TITLES.includes((col.name ?? '').toLowerCase())) continue
-      const dueDate: string = col.grading?.due ?? ''
-      
-      if (!dueDate) continue
-      deadlines.push({
-        id:          `${course.id}-${col.id}`,
-        courseId:    course.id,
-        courseName:  course.name,
-        task:        col.name ?? 'Assignment',
-        dueDate,
-        createdDate: extractDate(col),
-        urgency:     scoreUrgency(dueDate),
-      })
-    }
-    console.log(`[Scraper] fetchAssignmentDeadlines: ${course.name} → ${deadlines.length}`)
-    return deadlines
   } catch (e) {
-    console.warn(`[Scraper] fetchAssignmentDeadlines failed for ${course.name}:`, e)
-    return []
+    console.warn(`[Sunway Extension] Failed to fetch gradebook for ${course.name}:`, e)
   }
+
+  return deadlines
 }
 
-// ─── Content type constants ───────────────────────────────────────────────────
+async function fetchContentTitle(courseId: string, contentId: string): Promise<string> {
+  try {
+    const res = await fetchWithTimeout(
+      `${BASE_URL}/learn/api/v1/courses/${courseId}/contents/${contentId}`,
+      { credentials: 'include' }
+    )
+    if (!res.ok) return ''
+    const data = await res.json()
+    return data.title ?? data.name ?? ''
+  } catch {
+    return ''
+  }
+}
 
 const ASSIGNMENT_CONTENT_TYPES = [
   'resource/x-bb-assignment',
-  'resource/x-bb-courseassessment',
-  'resource/x-bb-externalassessment',
-  'resource/x-bb-syllabus',
+  'resource/x-bb-assessment',
+  'resource/x-bb-turnitin-assignment',
   'resource/x-turnitin-assignment',
-  'resource/x-bb-bltiplacement-Assessment',
+  'resource/x-bb-courselink',
+  'resource/x-bb-asmt-test-link',
+  'resource/x-bb-blti-link',
 ]
 
 const DISCUSSION_CONTENT_TYPES = [
   'resource/x-bb-forumlink',
   'resource/x-bb-discussionboard',
-  'resource/x-bb-groupdiscussionboard',
+  'resource/x-bb-discussion',
 ]
 
 const FOLDER_CONTENT_TYPES = [
   'resource/x-bb-folder',
-  'resource/x-bb-module',
-  'resource/x-bb-lessonplan',
+  'resource/x-bb-lesson',
+  'resource/x-bb-coursemodule',
 ]
 
-// ─── Content tree walker ──────────────────────────────────────────────────────
-
-/** Walks the course content tree for assignments and discussions. Drills into folders recursively. */
 export async function fetchContentAssignments(course: Course): Promise<Deadline[]> {
-  try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/courses/${course.id}/contents?limit=100`,
-      { credentials: 'include' }
-    )
-    if (!res.ok) return []
-    const items: any[] = (await res.json()).results ?? []
-
-    const assignments = extractAssignmentItems(items, course)
-
-    const folderDeadlines = (
-      await Promise.allSettled(
-        items
-          .filter(item => FOLDER_CONTENT_TYPES.includes(item.contentHandler?.id ?? ''))
-          .map(f => fetchFolderContents(course, f.id))
-      )
-    )
-      .filter((r): r is PromiseFulfilledResult<Deadline[]> => r.status === 'fulfilled')
-      .flatMap(r => r.value)
-
-    const discussionDeadlines = await fetchDiscussions(course)
-
-    return [...assignments, ...folderDeadlines, ...discussionDeadlines]
-  } catch (e) {
-    console.warn(`[Scraper] fetchContentAssignments failed for ${course.name}:`, e)
-    return []
-  }
-}
-
-/** Fetches a folder's children and recurses into sub-folders. */
-async function fetchFolderContents(course: Course, folderId: string): Promise<Deadline[]> {
-  try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/courses/${course.id}/contents/${folderId}/children?limit=100`,
-      { credentials: 'include' }
-    )
-    if (!res.ok) return []
-    const items: any[] = (await res.json()).results ?? []
-
-    const assignments = extractAssignmentItems(items, course)
-    const nested = (
-      await Promise.allSettled(
-        items
-          .filter(item => FOLDER_CONTENT_TYPES.includes(item.contentHandler?.id ?? ''))
-          .map(f => fetchFolderContents(course, f.id))
-      )
-    )
-      .filter((r): r is PromiseFulfilledResult<Deadline[]> => r.status === 'fulfilled')
-      .flatMap(r => r.value)
-
-    return [...assignments, ...nested]
-  } catch (e) {
-    console.warn(`[Scraper] fetchFolderContents failed (${folderId}):`, e)
-    return []
-  }
-}
-
-/** Fetches discussion board posts that have due dates. */
-async function fetchDiscussions(course: Course): Promise<Deadline[]> {
-  try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/courses/${course.id}/discussions?limit=50`,
-      { credentials: 'include' }
-    )
-    if (!res.ok) return []
-    const deadlines: Deadline[] = []
-    for (const item of (await res.json()).results ?? []) {
-      const dueDate: string = item.dueDate ?? item.settings?.dueDate ?? ''
-      if (!dueDate) continue
-      deadlines.push({
-        id:          `disc-${course.id}-${item.id}`,
-        courseId:    course.id,
-        courseName:  course.name,
-        task:        item.title ?? 'Discussion',
-        dueDate,
-        createdDate: extractDate(item),
-        urgency:     scoreUrgency(dueDate),
-      })
-    }
-    return deadlines
-  } catch (e) {
-    console.warn(`[Scraper] fetchDiscussions failed for ${course.name}:`, e)
-    return []
-  }
-}
-
-// ─── Assignment item extractor ────────────────────────────────────────────────
-
-const ASSIGNMENT_KEYWORDS = /assignment|quiz|test|exam|lab|project|report|submission|practical|assessment/i
-
-/** Filters content items for assignments — checks handler type OR title keywords. */
-function extractAssignmentItems(items: any[], course: Course): Deadline[] {
   const deadlines: Deadline[] = []
-  for (const item of items) {
-    const handlerId: string = item.contentHandler?.id ?? ''
-    const isAssignmentType =
-      ASSIGNMENT_CONTENT_TYPES.includes(handlerId) ||
-      DISCUSSION_CONTENT_TYPES.includes(handlerId)
-    const hasKeyword = ASSIGNMENT_KEYWORDS.test(item.title ?? '')
-    if (!isAssignmentType && !hasKeyword) continue
-    const dueDate: string = item.grading?.due ?? item.availability?.adaptive?.end ?? ''
-    if (!dueDate) continue
-    deadlines.push({
-      id:          `content-${course.id}-${item.id}`,
-      courseId:    course.id,
-      courseName:  course.name,
-      task:        item.title ?? 'Assignment',
-      dueDate,
-      createdDate: extractDate(item),
-      urgency:     scoreUrgency(dueDate),
-    })
-  }
+
+  try {
+    let url: string | null = `${BASE_URL}/learn/api/v1/courses/${course.id}/contents?limit=200`
+    const allResults: any[] = []
+
+    while (url) {
+      const res = await fetchWithTimeout(url, { credentials: 'include' })
+      if (!res.ok) break
+      const data = await res.json()
+      allResults.push(...(data.results ?? []))
+      url = data.paging?.nextPage ? `${BASE_URL}${data.paging.nextPage}` : null
+    }
+
+
+    deadlines.push(...extractAssignmentItems(allResults, course))
+
+    const folders = allResults.filter(
+      (item: any) => FOLDER_CONTENT_TYPES.includes(item.contentHandler?.id ?? '') && item.hasChildren
+    )
+    for (const folder of folders) {
+      const childDeadlines = await fetchFolderContents(course, folder.id)
+      deadlines.push(...childDeadlines)
+    }
+  } catch {}
+
   return deadlines
 }
 
-// ─── Linked deadline extraction ───────────────────────────────────────────────
-
-// matches deep links like /ultra/courses/_xxx/outline/assessment/_yyy
-// lecturers often embed these links in announcements to reference assignment pages
-const ELEARN_LINK_PATTERN = /https?:\/\/elearn\.sunway\.edu\.my\/ultra\/courses\/(_\w+)\/(?:outline\/(?:assessment|discussion)|grades\/assessment)\/(_\w+)/g
-
-/** Scans raw HTML + href attributes for eLearn deep links. Deduplicates by courseId|contentId. */
-function extractElearnLinks(text: string): Array<{ courseId: string; contentId: string }> {
-  const seen = new Set<string>()
-  const links: Array<{ courseId: string; contentId: string }> = []
-
-  const pattern = new RegExp(ELEARN_LINK_PATTERN.source, 'g')
-  const allText = text + ' ' + (text.match(pattern) || []).map(m => m.replace(/href=["']|["']/g, '')).join(' ')
-
-  let match: RegExpExecArray | null
-  ELEARN_LINK_PATTERN.lastIndex = 0
-  while ((match = ELEARN_LINK_PATTERN.exec(allText)) !== null) {
-    const key = `${match[1]}|${match[2]}`
-    if (!seen.has(key)) continue
-    seen.add(key)
-    links.push({ courseId: match[1], contentId: match[2] })
-  }
-  return links
-}
-
-/** Tries to fetch a linked item's deadline via gradebook columns, then content items. */
-async function fetchLinkedItemDeadline(
-  courseId: string,
-  contentId: string,
-  courseName: string
-): Promise<Deadline | null> {
-  try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/courses/${courseId}/gradebook/columns/${contentId}`,
-      { credentials: 'include' }
-    )
-    if (res.ok) {
-      const col = await res.json()
-      const dueDate: string = col.grading?.due ?? ''
-      if (dueDate) return {
-        id: `linked-${courseId}-${contentId}`, courseId, courseName,
-        task: col.name ?? 'Assignment', dueDate,
-        createdDate: extractDate(col), urgency: scoreUrgency(dueDate),
-      }
-    }
-  } catch { /* fall through */ }
+async function fetchFolderContents(course: Course, folderId: string): Promise<Deadline[]> {
+  const deadlines: Deadline[] = []
 
   try {
-    const res = await fetch(
-      `${BASE_URL}/learn/api/v1/courses/${courseId}/contents/${contentId}`,
+    const res = await fetchWithTimeout(
+      `${BASE_URL}/learn/api/v1/courses/${course.id}/contents/${folderId}/children?limit=100`,
       { credentials: 'include' }
     )
-    if (res.ok) {
-      const item = await res.json()
-      const dueDate: string = item.grading?.due ?? ''
-      if (dueDate) return {
-        id: `linked-${courseId}-${contentId}`, courseId, courseName,
-        task: item.title ?? 'Assignment', dueDate,
-        createdDate: extractDate(item), urgency: scoreUrgency(dueDate),
-      }
-    }
-  } catch { /* not found */ }
+    if (!res.ok) return deadlines
 
-  return null
+    const data = await res.json()
+    const results: any[] = data.results ?? []
+    deadlines.push(...extractAssignmentItems(results, course))
+
+    // Recurse into sub-folders
+    const subFolders = results.filter(
+      (item: any) => FOLDER_CONTENT_TYPES.includes(item.contentHandler?.id ?? '') && item.hasChildren
+    )
+    for (const folder of subFolders) {
+      const childDeadlines = await fetchFolderContents(course, folder.id)
+      deadlines.push(...childDeadlines)
+    }
+  } catch {}
+
+  return deadlines
 }
 
-/** Scans all announcement bodies for eLearn deep links and fetches their deadlines. */
-export async function fetchLinkedDeadlines(announcements: Announcement[]): Promise<Deadline[]> {
-  const seen = new Set<string>()
-  const fetches: Promise<Deadline | null>[] = []
 
-  for (const ann of announcements) {
-    const text = `${ann.rawBody ?? ''} ${ann.body}`
-    for (const { courseId, contentId } of extractElearnLinks(text)) {
-      const key = `${courseId}|${contentId}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      fetches.push(fetchLinkedItemDeadline(courseId, contentId, ann.courseName))
-    }
-  }
+function extractAssignmentItems(items: any[], course: Course): Deadline[] {
+  const deadlines: Deadline[] = []
 
-  const results = await Promise.allSettled(fetches)
-  return results
-    .filter((r): r is PromiseFulfilledResult<Deadline> => r.status === 'fulfilled' && r.value !== null)
-    .map(r => r.value)
-}
+  for (const item of items) {
+    const handlerId = item.contentHandler?.id ?? ''
+    const isAssignmentType = ASSIGNMENT_CONTENT_TYPES.includes(handlerId)
+    const isDiscussionType = DISCUSSION_CONTENT_TYPES.includes(handlerId)
+    const hasDueDate = !!(item.availability?.adaptiveRelease?.end || item.endDate || item.dueDate)
+    const titleLooksLikeAssignment = /\b(assignment|submission|quiz|test|exam|lab report|project|discussion|group\s*work|coursework)\b/i.test(
+      item.title ?? ''
+    )
 
-// ─── Main entry point ─────────────────────────────────────────────────────────
+    if (!isAssignmentType && !isDiscussionType && !titleLooksLikeAssignment && !hasDueDate) continue
 
-/**
- * Orchestrates a full scrape:
- * 1. fetchCourses()
- * 2. For each course: fetchAnnouncements + fetchAssignmentDeadlines + fetchContentAssignments
- * 3. fetchLinkedDeadlines from announcement bodies
- * 4. Deduplicates by courseId|task|dueDate
- * 5. Creates synthetic announcement cards for assignments with no matching announcement
- */
-export async function scrapeAllCourses(): Promise<{
-  courses: Course[]
-  announcements: Announcement[]
-  assignmentDeadlines: Deadline[]
-}> {
-  console.log('[Scraper] scrapeAllCourses() started')
+    const dueDate = item.availability?.adaptiveRelease?.end
+      ?? item.endDate
+      ?? item.dueDate
+      ?? item.availability?.adaptiveRelease?.start
+      ?? ''
 
-  const courses = await fetchCourses()
-  if (courses.length === 0) {
-    console.warn('[Scraper] No courses found — returning empty')
-    return { courses: [], announcements: [], assignmentDeadlines: [] }
-  }
+    const isoDate = dueDate
+      ? (typeof dueDate === 'string' ? dueDate.split('T')[0] : new Date(dueDate).toISOString().split('T')[0])
+      : ''
 
-  const [announcementResults, deadlineResults, contentResults] = await Promise.all([
-    Promise.allSettled(courses.map(c => fetchAnnouncements(c))),
-    Promise.allSettled(courses.map(c => fetchAssignmentDeadlines(c))),
-    Promise.allSettled(courses.map(c => fetchContentAssignments(c))),
-  ])
+    const created = item.created ?? item.modified ?? ''
+    const createdDate = created
+      ? (typeof created === 'string' ? created : new Date(created).toISOString())
+      : ''
 
-  const announcements = announcementResults
-    .filter((r): r is PromiseFulfilledResult<Announcement[]> => r.status === 'fulfilled')
-    .flatMap(r => r.value)
-
-  const gradebookDeadlines = deadlineResults
-    .filter((r): r is PromiseFulfilledResult<Deadline[]> => r.status === 'fulfilled')
-    .flatMap(r => r.value)
-
-  const contentDeadlines = contentResults
-    .filter((r): r is PromiseFulfilledResult<Deadline[]> => r.status === 'fulfilled')
-    .flatMap(r => r.value)
-
-  const linkedDeadlines = await fetchLinkedDeadlines(announcements)
-
-  // Deduplicate by courseId|task|dueDate
-  const seen = new Set<string>()
-  const allDeadlines: Deadline[] = []
-  for (const d of [...gradebookDeadlines, ...contentDeadlines, ...linkedDeadlines]) {
-    const key = `${d.courseId}|${d.task.toLowerCase().trim()}|${d.dueDate}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    allDeadlines.push(d)
-  }
-
-  // Synthetic announcement cards for assignments with no matching announcement
-  const announcedTasks = new Set(
-    announcements.map(a => `${a.courseId}|${a.title.toLowerCase().trim()}`)
-  )
-  for (const d of allDeadlines) {
-    if (announcedTasks.has(`${d.courseId}|${d.task.toLowerCase().trim()}`)) continue
-    announcements.push({
-      id:         `synthetic-${d.id}`,
-      courseId:   d.courseId,
-      courseName: d.courseName,
-      title:      d.task,
-      body:       `Due: ${d.dueDate}`,
-      date:       d.dueDate,
-      dateType:   'due',
+    deadlines.push({
+      id: `dl-content-${course.id}-${item.id}`,
+      courseId: course.id,
+      courseName: course.name,
+      task: item.title ?? 'Assignment',
+      dueDate: isoDate,
+      createdDate,
+      contentId: item.id,
+      urgency: scoreUrgency(isoDate),
     })
   }
 
-  console.log(`[Scraper] done — ${courses.length} courses, ${announcements.length} announcements, ${allDeadlines.length} deadlines`)
-  return { courses, announcements, assignmentDeadlines: allDeadlines }
+  return deadlines
+}
+
+// Matches: /ultra/courses/{courseId}/outline/assessment/{contentId}
+//          /ultra/courses/{courseId}/grades/assessment/{contentId}
+const ELEARN_COURSE_LINK_PATTERN = /https?:\/\/elearn\.sunway\.edu\.my\/ultra\/courses\/(_\w+)\/(?:outline\/(?:assessment|discussion)|grades\/assessment)\/(_\w+)/g
+// Matches: /ultra/stream/assessment/{contentId}/overview?courseId={courseId}
+const ELEARN_STREAM_LINK_PATTERN = /https?:\/\/elearn\.sunway\.edu\.my\/ultra\/stream\/assessment\/(_\w+)\/overview\?courseId=(_\w+)/g
+
+function extractElearnLinks(text: string): { courseId: string; contentId: string }[] {
+  const links: { courseId: string; contentId: string }[] = []
+  const seen = new Set<string>()
+
+  // Also extract href values from raw HTML anchor tags
+  const hrefPattern = /href=["']([^"']*elearn\.sunway\.edu\.my[^"']*)["']/gi
+  const allText = text + ' ' + (text.match(hrefPattern) || []).map(m => m.replace(/href=["']|["']/g, '')).join(' ')
+
+  let match: RegExpExecArray | null
+  ELEARN_COURSE_LINK_PATTERN.lastIndex = 0
+  while ((match = ELEARN_COURSE_LINK_PATTERN.exec(allText)) !== null) {
+    const key = `${match[1]}|${match[2]}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      links.push({ courseId: match[1], contentId: match[2] })
+    }
+  }
+
+  ELEARN_STREAM_LINK_PATTERN.lastIndex = 0
+  while ((match = ELEARN_STREAM_LINK_PATTERN.exec(allText)) !== null) {
+    // stream pattern: group 1 = contentId, group 2 = courseId
+    const key = `${match[2]}|${match[1]}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      links.push({ courseId: match[2], contentId: match[1] })
+    }
+  }
+
+  return links
+}
+
+async function fetchLinkedItemDeadline(courseId: string, contentId: string, courseName: string): Promise<Deadline | null> {
+  // Try as assessment/content item
+  for (const endpoint of [
+    `${BASE_URL}/learn/api/v1/courses/${courseId}/contents/${contentId}`,
+    `${BASE_URL}/learn/api/v1/courses/${courseId}/gradebook/columns?contentId=${contentId}`,
+  ]) {
+    try {
+      const res = await fetchWithTimeout(endpoint, { credentials: 'include' })
+      if (!res.ok) continue
+      const data = await res.json()
+
+      const item = data.results ? data.results[0] : data
+      if (!item) continue
+
+      const dueDate = item.dueDate
+        ?? item.grading?.due
+        ?? item.availability?.adaptiveRelease?.end
+        ?? item.endDate
+        ?? ''
+      const title = item.name ?? item.title ?? 'Assignment'
+
+      const isoDate = dueDate
+        ? (typeof dueDate === 'string' ? dueDate.split('T')[0] : new Date(dueDate).toISOString().split('T')[0])
+        : ''
+
+      return {
+        id: `dl-linked-${courseId}-${contentId}`,
+        courseId,
+        courseName,
+        task: title,
+        dueDate: isoDate,
+        contentId,
+        urgency: scoreUrgency(isoDate),
+      }
+    } catch {}
+  }
+  return null
+}
+
+export async function fetchLinkedDeadlines(announcements: Announcement[]): Promise<Deadline[]> {
+  const allLinks: { courseId: string; contentId: string; courseName: string }[] = []
+
+  for (const ann of announcements) {
+    const searchText = (ann.rawBody || '') + ' ' + (ann.body || '')
+    const links = extractElearnLinks(searchText)
+    for (const link of links) {
+      allLinks.push({ ...link, courseName: ann.courseName })
+    }
+  }
+
+  if (allLinks.length === 0) return []
+
+  const results = await runWithConcurrency(
+    allLinks.map(link => () => fetchLinkedItemDeadline(link.courseId, link.contentId, link.courseName)),
+    CONCURRENCY
+  )
+
+  return results.filter((d): d is Deadline => d !== null)
+}
+
+
+export async function scrapeAllCourses(): Promise<{ courses: Course[]; announcements: Announcement[]; assignmentDeadlines: Deadline[] }> {
+  const courses = await fetchCourses()
+  console.log(`[Sunway Extension] Fetched ${courses.length} courses, scraping in parallel...`)
+  const announcements: Announcement[] = []
+  const assignmentDeadlines: Deadline[] = []
+
+  const results = await runWithConcurrency(
+    courses.map(course => async () => {
+      const [courseAnnouncements, gradebookDeadlines, contentDeadlines] = await Promise.allSettled([
+        fetchAnnouncements(course),
+        fetchAssignmentDeadlines(course),
+        fetchContentAssignments(course),
+      ])
+      return {
+        announcements: courseAnnouncements.status === 'fulfilled' ? courseAnnouncements.value : [],
+        gradebook: gradebookDeadlines.status === 'fulfilled' ? gradebookDeadlines.value : [],
+        content: contentDeadlines.status === 'fulfilled' ? contentDeadlines.value : [],
+      }
+    }),
+    CONCURRENCY
+  )
+
+  for (const result of results) {
+    announcements.push(...result.announcements)
+    assignmentDeadlines.push(...result.gradebook)
+    assignmentDeadlines.push(...result.content)
+  }
+
+  console.log(`[Sunway Extension] Got ${announcements.length} announcements, ${assignmentDeadlines.length} deadlines`)
+
+  // Fetch deadlines from eLearn links embedded in announcement bodies
+  const linkedDeadlines = await fetchLinkedDeadlines(announcements)
+  assignmentDeadlines.push(...linkedDeadlines)
+
+  // Deduplicate by matching course + task name + due date
+  const seen = new Set<string>()
+  const dedupedDeadlines: Deadline[] = []
+  for (const dl of assignmentDeadlines) {
+    const key = `${dl.courseId}|${dl.task.toLowerCase().trim()}|${dl.dueDate}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    dedupedDeadlines.push(dl)
+  }
+
+  // For real announcements that match a deadline by course+title, update their date to
+  // the system due date and mark as 'due' so the urgency tag uses the correct date
+  const deadlineByKey = new Map<string, Deadline>()
+  for (const dl of dedupedDeadlines) {
+    if (!dl.dueDate) continue
+    deadlineByKey.set(`${dl.courseId}|${dl.task.toLowerCase().trim()}`, dl)
+  }
+  for (const ann of announcements) {
+    const key = `${ann.courseId}|${ann.title.toLowerCase().trim()}`
+    const dl = deadlineByKey.get(key)
+    if (dl) {
+      ann.date = dl.dueDate
+      ann.dateType = 'due'
+    }
+  }
+
+  // Create announcement cards for assignments that don't have a matching announcement
+  const announcementKeys = new Set(
+    announcements.map(a => `${a.courseId}|${a.title.toLowerCase().trim()}`)
+  )
+  for (const dl of dedupedDeadlines) {
+    const key = `${dl.courseId}|${dl.task.toLowerCase().trim()}`
+    if (announcementKeys.has(key)) continue
+    announcementKeys.add(key)
+
+    const dueDateText = dl.dueDate
+      ? `Due: ${new Date(dl.dueDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+      : 'No due date specified'
+
+    const linkUrl = dl.contentId
+      ? `${BASE_URL}/ultra/stream/assessment/${dl.contentId}/overview?courseId=${dl.courseId}`
+      : `${BASE_URL}/ultra/courses/${dl.courseId}/outline`
+
+    const hasDueDate = !!dl.dueDate
+
+    announcements.push({
+      id: `ann-${dl.id}`,
+      courseId: dl.courseId,
+      courseName: dl.courseName,
+      title: dl.task,
+      body: `${dl.task} — ${dueDateText}. This item requires submission.`,
+      date: hasDueDate ? dl.dueDate : (dl.createdDate || ''),
+      dateType: hasDueDate ? 'due' : 'posted',
+      linkUrl,
+      isAssignment: true,
+    })
+  }
+
+  return { courses, announcements, assignmentDeadlines: dedupedDeadlines }
 }
