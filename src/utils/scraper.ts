@@ -50,8 +50,8 @@ function stripHtml(html: unknown): string {
 
 function extractDate(item: any): string {
   const knownFields = [
-    item.created,
     item.modified,
+    item.created,
     item.postedDate,
     item.startDate,
     item.startDateTime,
