@@ -3,7 +3,7 @@ import type {
   Announcement,
   Deadline,
   SummarisedAnnouncement,
-  AppSettings
+  AppSettings,
 } from './types'
 
 export interface StorageSchema {
@@ -13,6 +13,18 @@ export interface StorageSchema {
   assignmentDeadlines: Deadline[]
   lastFetched: number
   settings: AppSettings
+  notifiedDeadlines: Record<string, number>
+}
+
+const DEFAULT_SETTINGS: AppSettings = {
+  refreshInterval: 60,
+  notificationsEnabled: true,
+  notificationTiming: ['1week'],
+  notificationTypes: {
+    deadlineReminders: true,
+    newAnnouncements: true,
+    urgentOnly: false,
+  },
 }
 
 export async function storageGet<K extends keyof StorageSchema>(
@@ -34,14 +46,6 @@ export async function storageSet<K extends keyof StorageSchema>(
   })
 }
 
-// extracted as a named constant so getSettings() and initStorage() share one source of truth
-const DEFAULT_SETTINGS: AppSettings = {
-  ollamaUrl: 'http://localhost:11434',
-  ollamaModel: 'llama3.2',
-  refreshInterval: 60,
-  notificationsEnabled: true,
-}
-
 export async function getSettings(): Promise<AppSettings> {
   const saved = await storageGet('settings')
   return { ...DEFAULT_SETTINGS, ...saved }
@@ -53,4 +57,3 @@ export async function initStorage(): Promise<void> {
     await storageSet('settings', DEFAULT_SETTINGS)
   }
 }
-
