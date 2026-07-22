@@ -9,7 +9,11 @@ const TIMING_OPTIONS: { value: NotificationTiming; label: string }[] = [
   { value: '2weeks', label: '2 weeks before' },
 ]
 
-export default function SettingsTab() {
+type SettingsTabProps = {
+  onClose: () => void
+}
+
+export default function SettingsTab({ onClose }: SettingsTabProps) {
   const [settings, setSettings] = useState<AppSettings>({
     refreshInterval: 60,
     notificationsEnabled: true,
@@ -44,6 +48,16 @@ export default function SettingsTab() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <button
+          onClick={onClose}
+          className="text-xs font-medium text-blue-600 hover:text-blue-700"
+          type="button"
+        >
+          ← Back
+        </button>
+      </div>
+
       {/* General Settings */}
       <div className="bg-white rounded-lg border border-gray-200 p-3 space-y-3">
         <span className="text-sm font-medium text-gray-900">General</span>

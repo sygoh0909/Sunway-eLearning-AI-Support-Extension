@@ -290,7 +290,7 @@ export default function App() {
       <div className="flex-1 overflow-y-auto">
         <div className="p-3 space-y-3">
           {view === 'settings' ? (
-            <SettingsTab />
+            <SettingsTab onClose={() => setView('main')} />
           ) : (
             <>
               {error && <ErrorMessage message={error} />}
