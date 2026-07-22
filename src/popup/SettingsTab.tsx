@@ -72,7 +72,7 @@ export default function SettingsTab() {
           >
             <span
               className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                settings.notificationsEnabled ? 'translate-x-4.5' : 'translate-x-0.5'
+                settings.notificationsEnabled ? 'translate-x-5' : 'translate-x-0.5'
               }`}
             />
           </button>

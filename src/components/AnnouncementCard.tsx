@@ -74,6 +74,60 @@ export default function AnnouncementCard({ announcement }: Props) {
               <p className="text-[11px] text-gray-700 leading-relaxed">{cleanText(announcement.summary)}</p>
             </div>
           </div>
+
+          {/* Key Info rows */}
+          {announcement.keyInfo && Object.keys(announcement.keyInfo).length > 0 && (
+            <div className="mt-1.5 pt-1.5 border-t border-blue-100 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+              {announcement.keyInfo.date && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Date</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.date}</span>
+                </>
+              )}
+              {announcement.keyInfo.time && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Time</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.time}</span>
+                </>
+              )}
+              {announcement.keyInfo.location && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Location</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.location}</span>
+                </>
+              )}
+              {announcement.keyInfo.registrationFee && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Reg. Fee</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.registrationFee}</span>
+                </>
+              )}
+              {announcement.keyInfo.registrationDeadline && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Reg. By</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.registrationDeadline}</span>
+                </>
+              )}
+              {announcement.keyInfo.speakers && announcement.keyInfo.speakers.length > 0 && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Speaker(s)</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.speakers.join(', ')}</span>
+                </>
+              )}
+              {announcement.keyInfo.dress && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Dress</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.dress}</span>
+                </>
+              )}
+              {announcement.keyInfo.contact && (
+                <>
+                  <span className="text-[10px] font-semibold text-blue-700 whitespace-nowrap">Contact</span>
+                  <span className="text-[10px] text-gray-700">{announcement.keyInfo.contact}</span>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Original Content (Expandable) */}

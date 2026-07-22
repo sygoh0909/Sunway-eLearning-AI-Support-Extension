@@ -1,4 +1,4 @@
-import type { Announcement, SummarisedAnnouncement } from './types'
+import type { Announcement, SummarisedAnnouncement, KeyInfo } from './types'
 import { extractDeadlines, scoreUrgency, categorizeAnnouncement, computePriorityScore } from './deadlines'
 import { storageGet } from './storage'
 
@@ -116,9 +116,76 @@ function textRank(sentences: string[], topN: number): string[] {
   return topIndices.map(i => sentences[i])
 }
 
+function extractKeyInfo(body: string): KeyInfo {
+  const text = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ')
+  const lines = text.split(/(?:\r?\n|\.(?=\s)|;)/).map(l => l.trim()).filter(Boolean)
+  const info: KeyInfo = {}
+
+  const find = (pattern: RegExp): string | undefined => {
+    for (const line of lines) {
+      const m = line.match(pattern)
+      if (m) return m[1]?.trim()
+    }
+    return undefined
+  }
+
+  // Date — text labels OR 📌/📅 emoji prefix OR bare "DD Month YYYY" / "Month DD, YYYY" / DD/MM/YYYY
+  info.date = find(/(?:date|event\s*date|held\s+on|takes?\s+place\s+on)[:\s]+([^\n;,]{5,40})/i)
+    ?? find(/(?:📌|📅)\s*(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{4})/i)
+    ?? find(/\b(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{4})\b/i)
+    ?? find(/\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}[,\s]+\d{4})\b/i)
+    ?? find(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/)
+
+  // Time — text labels OR ⏱️ emoji prefix OR bare HH:MM or H(AM/PM) range
+  info.time = find(/(?:time|starts?\s+at|from)[:\s]+(\d{1,2}[:.]\d{2}\s*(?:am|pm)?(?:\s*[-–to]+\s*\d{1,2}[:.]\d{2}\s*(?:am|pm)?)?)/i)
+    ?? find(/(?:⏱️|🕐|🕑|🕒|🕓|🕔|🕕|🕖|🕗|🕘|🕙|🕚|🕛)\s*(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?(?:\s*[-–to]+\s*\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)?)/i)
+    ?? find(/(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)\s*[-–to]+\s*\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm))/i)
+
+  // Location — text labels OR 📍 emoji prefix
+  info.location = find(/(?:venue|location|place|held\s+at|room|hall)[:\s]+([^.\n;]{3,80})/i)
+    ?? find(/📍\s*([^.\n;📌⏱️💰]{3,80})/)
+
+  // Registration fee — text labels OR 💰 emoji prefix OR bare RM/$ amount
+  info.registrationFee = find(/(?:registration\s*fee|entry\s*fee|ticket\s*price|fee)[:\s]+((?:rm|myr|usd|\$|free)[^\n;.]{0,60})/i)
+    ?? find(/💰\s*([^\n;.📌⏱️📍]{3,80})/)
+    ?? find(/\b(rm\d+[^\n;.]{0,60})/i)
+    ?? find(/(?:free\s+of\s+charge|no\s+fee|complimentary)/i)?.replace(/.*/, 'Free')
+
+  // Registration deadline
+  info.registrationDeadline = find(/(?:register(?:ation)?\s*(?:by|before|deadline|closes?)|deadline\s+(?:to\s+)?register|sign[\s-]up\s+by)[:\s]+([^\n;.]{5,50})/i)
+
+  // Speakers / guests
+  const speakerMatches: string[] = []
+  const speakerPattern = /(?:speaker|presenter|guest|keynote|panelist|facilitator|host)[:\s]+([A-Z][^.\n;,]{3,60})/gi
+  let sm: RegExpExecArray | null
+  while ((sm = speakerPattern.exec(text)) !== null) {
+    const name = sm[1].trim()
+    if (!speakerMatches.includes(name)) speakerMatches.push(name)
+    if (speakerMatches.length >= 5) break
+  }
+  if (speakerMatches.length > 0) info.speakers = speakerMatches
+
+  // Dress code
+  info.dress = find(/(?:dress\s*code|attire|dress)[:\s]+([^\n;.]{3,50})/i)
+
+  // Contact / RSVP
+  info.contact = find(/(?:contact|rsvp|enquir(?:y|ies)|questions?)[:\s]+([^\n;]{5,80})/i)
+
+  // Remove undefined keys
+  const clean: KeyInfo = {}
+  for (const [k, v] of Object.entries(info)) {
+    if (v !== undefined && v !== '') (clean as Record<string, unknown>)[k] = v
+  }
+  return clean
+}
+
 function generateSummary(announcement: Announcement): string {
   let body = announcement.body.trim()
-  body = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim()
+  body = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim()
+  // Break at every emoji so emoji-delimited structured data (📌 date ⏱️ time 📍 venue 💰 fee)
+  // becomes short isolated sentences that the TextRank length penalty will downrank.
+  body = body.replace(/\p{Extended_Pictographic}/gu, '. ')
+  body = body.replace(/\s+/g, ' ').trim()
 
   const sentences = body.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(s => s.length > 10)
 
@@ -158,7 +225,8 @@ export async function summarise(announcements: Announcement[]): Promise<Summaris
       const cachedDeadlines = cached.deadlines ?? []
       const category = categorizeAnnouncement(announcement.title, announcement.body, announcement.courseName)
       const priorityScore = computePriorityScore({ ...announcement, deadlines: cachedDeadlines })
-      results.push({ ...announcement, summary: cached.summary, deadlines: cachedDeadlines, category, priorityScore })
+      const keyInfo = cached.keyInfo ?? extractKeyInfo(announcement.body)
+      results.push({ ...announcement, summary: cached.summary, deadlines: cachedDeadlines, category, priorityScore, keyInfo })
     } else {
       uncached.push(announcement)
     }
@@ -215,7 +283,8 @@ export async function summarise(announcements: Announcement[]): Promise<Summaris
 
     const category = categorizeAnnouncement(announcement.title, announcement.body, announcement.courseName)
     const priorityScore = computePriorityScore({ ...announcement, deadlines })
-    results.push({ ...announcement, summary, deadlines, category, priorityScore })
+    const keyInfo = extractKeyInfo(announcement.body)
+    results.push({ ...announcement, summary, deadlines, category, priorityScore, keyInfo })
   }
 
   return results
