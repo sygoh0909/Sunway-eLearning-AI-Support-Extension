@@ -95,18 +95,23 @@ export default function FilterPanel({
   function setQuickDateFilter(filter: 'today' | 'week' | 'month') {
     const today = new Date()
     const formatDate = (date: Date) => date.toISOString().split('T')[0]
-    onDateFromChange(formatDate(today))
 
     if (filter === 'today') {
+      onDateFromChange(formatDate(today))
       onDateToChange(formatDate(today))
     } else if (filter === 'week') {
-      const end = new Date(today)
-      end.setDate(today.getDate() + 7)
-      onDateToChange(formatDate(end))
+      // Week runs Saturday to today (or Mon–today depending on locale day)
+      // Use ISO week: Monday as start of week
+      const day = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
+      const daysFromMonday = day === 0 ? 6 : day - 1
+      const weekStart = new Date(today)
+      weekStart.setDate(today.getDate() - daysFromMonday)
+      onDateFromChange(formatDate(weekStart))
+      onDateToChange(formatDate(today))
     } else {
-      const end = new Date(today)
-      end.setMonth(today.getMonth() + 1)
-      onDateToChange(formatDate(end))
+      const start = new Date(today.getFullYear(), today.getMonth(), 1)
+      onDateFromChange(formatDate(start))
+      onDateToChange(formatDate(today))
     }
   }
 

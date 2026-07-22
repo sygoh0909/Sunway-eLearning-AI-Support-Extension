@@ -101,9 +101,9 @@ export default function App() {
   function handleOpenWindow() {
     chrome.windows.create({
       url: chrome.runtime.getURL('src/popup/index.html?mode=window'),
-      type: 'popup',
-      width: 500,
-      height: 700,
+      type: 'normal',
+      width: 600,
+      height: 800,
     })
   }
 
@@ -183,9 +183,14 @@ export default function App() {
     return db - da
   })
 
-  const containerClass = isSidebar
+  const params = new URLSearchParams(window.location.search)
+  const isWindow = params.get('mode') === 'window'
+
+  const containerClass = isSidebar && !isWindow
     ? 'w-full h-screen flex flex-col bg-gray-50'
-    : 'w-[380px] min-h-[480px] max-h-[600px] flex flex-col bg-gray-50 resize overflow-auto'
+    : isWindow
+      ? 'w-full h-screen flex flex-col bg-gray-50 overflow-auto'
+      : 'w-[380px] min-h-[480px] max-h-[600px] flex flex-col bg-gray-50 resize overflow-auto'
 
   if (loading) return (
     <div className={containerClass}>
@@ -228,15 +233,17 @@ export default function App() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
-            <button
-              onClick={handleOpenWindow}
-              className="p-1 rounded hover:bg-gray-100 text-gray-600"
-              title="Open in new tab"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-              </svg>
-            </button>
+            {!isWindow && (
+              <button
+                onClick={handleOpenWindow}
+                className="p-1 rounded hover:bg-gray-100 text-gray-600"
+                title="Open in full window"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
         {view === 'main' && (
