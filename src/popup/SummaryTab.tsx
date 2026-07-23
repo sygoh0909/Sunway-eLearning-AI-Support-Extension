@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { storageGet } from '../utils/storage'
-import type { SummarisedAnnouncement } from '../utils/types'
+import { storageGet, storageSet } from '../utils/storage'
+import type { SummarisedAnnouncement, Urgency } from '../utils/types'
 import LoadingSpinner from '../components/LoadingSpinner'
 import ErrorMessage from '../components/ErrorMessage'
 import AnnouncementCard from '../components/AnnouncementCard'
@@ -12,16 +12,26 @@ export default function SummaryTab() {
   const [error, setError] = useState('')
   const [filter, setFilter] = useState<string>('all')
   const [lastFetched, setLastFetched] = useState<number | null>(null)
+  const [urgencyOverrides, setUrgencyOverrides] = useState<Record<string, Urgency>>({})
 
   useEffect(() => {
     loadAnnouncements()
   }, [])
 
   async function loadAnnouncements() {
-    try {   
+    try {
       setLoading(true)
       const data = await storageGet('summarised')
       const fetched = await storageGet('lastFetched')
+      const overrides = (await storageGet('urgencyOverrides')) ?? {}
+      setUrgencyOverrides(overrides)
+      if (data) {
+        for (const a of data) {
+          for (const d of a.deadlines) {
+            if (overrides[a.id]) d.urgency = overrides[a.id]
+          }
+        }
+      }
       setAnnouncements(data ?? [])
       setLastFetched(fetched)
     } catch {
@@ -29,6 +39,16 @@ export default function SummaryTab() {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleUrgencyChange(announcementId: string, newUrgency: Urgency) {
+    const updated = { ...urgencyOverrides, [announcementId]: newUrgency }
+    setUrgencyOverrides(updated)
+    await storageSet('urgencyOverrides', updated)
+    setAnnouncements(prev => prev.map(a => {
+      if (a.id !== announcementId) return a
+      return { ...a, deadlines: a.deadlines.map(d => ({ ...d, urgency: newUrgency })) }
+    }))
   }
 
   async function handleRefresh() {
@@ -124,7 +144,7 @@ export default function SummaryTab() {
 
           {/* Announcement list */}
           {filtered.map(announcement => (
-            <AnnouncementCard key={announcement.id} announcement={announcement} />
+            <AnnouncementCard key={announcement.id} announcement={announcement} onUrgencyChange={handleUrgencyChange} />
           ))}
         </>
       )}

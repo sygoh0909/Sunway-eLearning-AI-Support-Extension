@@ -118,7 +118,8 @@ function textRank(sentences: string[], topN: number): string[] {
 
 function extractKeyInfo(body: string): KeyInfo {
   const text = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ')
-  const lines = text.split(/(?:\r?\n|\.(?=\s)|;)/).map(l => l.trim()).filter(Boolean)
+  // Split on newlines, periods, semicolons, AND emoji boundaries (common in Sunway announcements)
+  const lines = text.split(/(?:\r?\n|\.(?=\s)|;|\s*(?=\p{Extended_Pictographic}))/u).map(l => l.trim()).filter(Boolean)
   const info: KeyInfo = {}
 
   const find = (pattern: RegExp): string | undefined => {
@@ -129,47 +130,73 @@ function extractKeyInfo(body: string): KeyInfo {
     return undefined
   }
 
-  // Date — text labels OR 📌/📅 emoji prefix OR bare "DD Month YYYY" / "Month DD, YYYY" / DD/MM/YYYY
-  info.date = find(/(?:date|event\s*date|held\s+on|takes?\s+place\s+on)[:\s]+([^\n;,]{5,40})/i)
-    ?? find(/(?:📌|📅)\s*(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{4})/i)
-    ?? find(/\b(\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{4})\b/i)
-    ?? find(/\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}[,\s]+\d{4})\b/i)
+  // Date — text labels OR 📌/📅/🗓️ emoji prefix OR bare date formats
+  // Supports ordinal suffixes (25th), day-of-week prefixes (Friday,), and date ranges (25 May – 5 June 2026)
+  const DAY_PREFIX = '(?:(?:mon|tue|wed|thu|fri|sat|sun)\\w*[,\\s]+\\s*)?'
+  const ORD = '(?:st|nd|rd|th)?'
+  const DATE_CORE = `\\d{1,2}${ORD}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*`
+  const DATE_RANGE_SUFFIX = `(?:\\s+\\d{4})?(?:\\s*[-–]\\s*\\d{1,2}${ORD}\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*(?:\\s+\\d{4})?)?`
+  const DATE_RANGE_SUFFIX_SAME_MONTH = `(?:\\s+\\d{4})?(?:\\s*[-–]\\s*\\d{1,2}${ORD}(?:\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*)?(?:\\s+\\d{4})?)?`
+  info.date = find(new RegExp(`(?:date|event\\s*date|held\\s+on|takes?\\s+place\\s+on)[:\\s]+${DAY_PREFIX}(${DATE_CORE}${DATE_RANGE_SUFFIX})`, 'i'))
+    ?? find(new RegExp(`(?:date|event\\s*date|held\\s+on|takes?\\s+place\\s+on)[:\\s]+${DAY_PREFIX}((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*\\s+\\d{1,2}${ORD}[,\\s]*\\d{0,4})`, 'i'))
+    ?? find(/(?:date|event\s*date|held\s+on|takes?\s+place\s+on)[:\s]+(?:(?:mon|tue|wed|thu|fri|sat|sun)\w*[,\s]+\s*)?(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/i)
+    ?? find(new RegExp(`(?:📌|📅|🗓️)\\s*(?:date[:\\s]*)?\\s*${DAY_PREFIX}(${DATE_CORE}${DATE_RANGE_SUFFIX})`, 'i'))
+    ?? find(new RegExp(`(?:📌|📅|🗓️)\\s*(?:date[:\\s]*)?\\s*${DAY_PREFIX}((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*\\s+\\d{1,2}${ORD}[,\\s]*\\d{0,4})`, 'i'))
+    ?? find(new RegExp(`\\b(${DATE_CORE}\\s+\\d{4}(?:\\s*[-–]\\s*${DATE_CORE}(?:\\s+\\d{4})?)?)\\b`, 'i'))
+    ?? find(/\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+\d{1,2}(?:st|nd|rd|th)?[,\s]+\d{4})\b/i)
     ?? find(/\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})\b/)
 
-  // Time — text labels OR ⏱️ emoji prefix OR bare HH:MM or H(AM/PM) range
+  // Time — text labels OR clock emoji prefix (all clock faces) OR bare time range
   info.time = find(/(?:time|starts?\s+at|from)[:\s]+(\d{1,2}[:.]\d{2}\s*(?:am|pm)?(?:\s*[-–to]+\s*\d{1,2}[:.]\d{2}\s*(?:am|pm)?)?)/i)
-    ?? find(/(?:⏱️|🕐|🕑|🕒|🕓|🕔|🕕|🕖|🕗|🕘|🕙|🕚|🕛)\s*(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?(?:\s*[-–to]+\s*\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)?)?)/i)
-    ?? find(/(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm)\s*[-–to]+\s*\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm))/i)
+    ?? find(/(?:⏱️|🕐|🕑|🕒|🕓|🕔|🕕|🕖|🕗|🕘|🕙|🕚|🕛|🕜|🕝|🕞|🕟|🕠|🕡|🕢|🕣|🕤|🕥|🕦|🕧)\s*(?:time[:\s]*)?\s*(\d{1,2}[:.]\d{2}\s*(?:am|pm)?(?:\s*[-–to]+\s*\d{1,2}[:.]\d{2}\s*(?:am|pm)?)?)/i)
+    ?? find(/(\d{1,2}[:.]\d{2}\s*(?:am|pm)\s*[-–to]+\s*\d{1,2}[:.]\d{2}\s*(?:am|pm))/i)
+    ?? find(/(\d{1,2}\s*(?:am|pm)\s*[-–to]+\s*\d{1,2}\s*(?:am|pm))/i)
 
-  // Location — text labels OR 📍 emoji prefix
-  info.location = find(/(?:venue|location|place|held\s+at|room|hall)[:\s]+([^.\n;]{3,80})/i)
-    ?? find(/📍\s*([^.\n;📌⏱️💰]{3,80})/)
+  // Location / Platform / Mode — text labels OR 📍/💻 emoji prefix
+  // Capture stops at emoji, period, semicolon, or field-starting keywords (deadline, registration, fee, etc.)
+  const LOC_PAT = '([^\\p{Extended_Pictographic}.;]{3,80}?)(?=\\s*(?:\\p{Extended_Pictographic}|[.;]|$|(?:The\\s+)?(?:registration|deadline|fee|date|time|contact|dress|speaker|enquir|for\\s+any)))'
+  info.location = find(new RegExp(`\\b(?:venue|location|place|platform|mode|held\\s+at|room|hall)[:\\s]+${LOC_PAT}`, 'iu'))
+    ?? find(new RegExp(`(?:📍|💻)\\s*(?:(?:venue|location|platform|mode)[:\\s]*)?\\s*${LOC_PAT}`, 'u'))
 
-  // Registration fee — text labels OR 💰 emoji prefix OR bare RM/$ amount
-  info.registrationFee = find(/(?:registration\s*fee|entry\s*fee|ticket\s*price|fee)[:\s]+((?:rm|myr|usd|\$|free)[^\n;.]{0,60})/i)
-    ?? find(/💰\s*([^\n;.📌⏱️📍]{3,80})/)
-    ?? find(/\b(rm\d+[^\n;.]{0,60})/i)
-    ?? find(/(?:free\s+of\s+charge|no\s+fee|complimentary)/i)?.replace(/.*/, 'Free')
+  // Registration fee — text labels OR 💰 emoji with fee-related label, skip prize/win contexts
+  info.registrationFee = find(/(?:registration\s*fees?|entry\s*fees?|ticket\s*prices?|participation\s*fees?)[:\s]+((?:rm|myr|usd|\$|free)[^\p{Extended_Pictographic};.!]{0,60})/iu)
+    ?? find(/(?:admission|fees?|cost)[:\s]+((?:rm|myr|usd|\$|free)[^\p{Extended_Pictographic};.!]{0,60})/iu)
+    ?? find(/💸\s*(?:(?:registration\s*)?fees?|admission|price|cost)[:\s]+((?:rm|myr|usd|\$|free)[^\p{Extended_Pictographic};.!]{0,60})/iu)
+    ?? find(/💰\s*(?:admission|fees?|price|cost)[:\s]+((?:rm|myr|usd|\$|free)[^\p{Extended_Pictographic};.!]{0,60})/iu)
+    ?? find(/(?:free\s+of\s+charge|no\s+fee|complimentary|free\s+admission|free\s+entry)/i)?.replace(/.*/, 'Free')
 
-  // Registration deadline
-  info.registrationDeadline = find(/(?:register(?:ation)?\s*(?:by|before|deadline|closes?)|deadline\s+(?:to\s+)?register|sign[\s-]up\s+by)[:\s]+([^\n;.]{5,50})/i)
+  // Registration/submission/nomination deadline — extract just the date (with optional day/parenthetical)
+  const DEADLINE_DATE = `((?:(?:mon|tue|wed|thu|fri|sat|sun)\\w*[,\\s]+\\s*)?\\d{1,2}(?:st|nd|rd|th)?\\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\\w*(?:\\s+\\d{4})?(?:\\s*,\\s*\\d{1,2}[:.:]\\d{2}\\s*(?:am|pm)?)?(?:\\s*\\([^)]*\\))?)`
+  info.registrationDeadline = find(new RegExp(`(?:register(?:ation)?\\s*(?:by|before|deadline|closes?)|(?:submission|nomination|sign[\\s-]?up)\\s+deadline|deadline\\s+(?:to\\s+)?(?:register|submit|nominate)|sign[\\s-]up\\s+by|registration\\s+deadline)[:\\s]+(?:[\\w\\s]*?(?:by|before|until|till)\\s+)?${DEADLINE_DATE}`, 'i'))
+    ?? find(new RegExp(`(?:extended|moved)\\s+(?:to|until|till)\\s+${DEADLINE_DATE}`, 'i'))
+    ?? find(new RegExp(`(?:📝|📌)\\s*(?:(?:registration|submission|nomination)\\s*(?:form\\s+)?deadline[:\\s]*)?\\s*(?:[\\w\\s]*?(?:by|before|until)\\s+)?${DEADLINE_DATE}`, 'i'))
+    ?? find(/(?:register(?:ation)?|submission|nomination)\s*(?:by|before|deadline|closes?)[:\s]+(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(?:\s+\d{4})?(?:\s*\([^)]*\))?)/i)
+    ?? find(/(?:📝)\s*(?:(?:registration|submission|nomination)\s*deadline[:\s]*)?\s*(\d{1,2}(?:st|nd|rd|th)?\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*(?:\s+\d{4})?(?:\s*\([^)]*\))?)/i)
 
-  // Speakers / guests
+  // Speakers / guests — allow honorifics (Dr., Ir., Prof., Mr., Ms., etc.) which contain periods
   const speakerMatches: string[] = []
-  const speakerPattern = /(?:speaker|presenter|guest|keynote|panelist|facilitator|host)[:\s]+([A-Z][^.\n;,]{3,60})/gi
+  const speakerPattern = /(?:speaker|presenter|guest|keynote|panelist|facilitator|host)[:\s]+((?:(?:Dr|Ir|Mr|Mrs|Ms|Prof|Assoc|Ts|Engr)\.?\s+)?[A-Z][A-Za-z'. -]{2,60})/g
   let sm: RegExpExecArray | null
   while ((sm = speakerPattern.exec(text)) !== null) {
-    const name = sm[1].trim()
+    const name = sm[1].trim().replace(/\s+/g, ' ')
     if (!speakerMatches.includes(name)) speakerMatches.push(name)
     if (speakerMatches.length >= 5) break
   }
   if (speakerMatches.length > 0) info.speakers = speakerMatches
 
-  // Dress code
-  info.dress = find(/(?:dress\s*code|attire|dress)[:\s]+([^\n;.]{3,50})/i)
+  // Dress code — require word boundary to avoid matching "address"
+  info.dress = find(/(?:dress\s*code|attire|\bdress)[:\s]+([^\p{Extended_Pictographic};.]{3,50})/iu)
 
-  // Contact / RSVP
-  info.contact = find(/(?:contact|rsvp|enquir(?:y|ies)|questions?)[:\s]+([^\n;]{5,80})/i)
+  // Contact / RSVP — prioritise email, phone, or name+email; avoid capturing sentence fragments
+  const emailMatch = text.match(/[\w.+-]+@[\w.-]+\.\w{2,}/i)
+  const phoneMatch = text.match(/(?:contact|rsvp|enquir|phone|tel|call)[:\s]*[^a-z]*?(\+?\d[\d\s\-()]{7,15}\d)/i)
+    ?? text.match(/(\+?6?0\d[\d\s\-]{7,12}\d)/)
+  if (emailMatch) {
+    const nameBeforeEmail = text.slice(Math.max(0, emailMatch.index! - 60), emailMatch.index!).match(/(?:(?:Dr|Ir|Mr|Mrs|Ms|Prof|Ts)\.?\s+)?([A-Z][A-Za-z'. -]{2,30})\s*[\(<]?$/)
+    info.contact = nameBeforeEmail ? `${nameBeforeEmail[0].trim()} (${emailMatch[0]})` : emailMatch[0]
+  } else if (phoneMatch) {
+    info.contact = phoneMatch[1] ?? phoneMatch[0]
+  }
 
   // Remove undefined keys
   const clean: KeyInfo = {}
@@ -182,8 +209,6 @@ function extractKeyInfo(body: string): KeyInfo {
 function generateSummary(announcement: Announcement): string {
   let body = announcement.body.trim()
   body = body.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim()
-  // Break at every emoji so emoji-delimited structured data (📌 date ⏱️ time 📍 venue 💰 fee)
-  // becomes short isolated sentences that the TextRank length penalty will downrank.
   body = body.replace(/\p{Extended_Pictographic}/gu, '. ')
   body = body.replace(/\s+/g, ' ').trim()
 
@@ -192,21 +217,21 @@ function generateSummary(announcement: Announcement): string {
   const isGreeting = (s: string) => /^(dear\s+|hi\s+|hello\s+|good\s+(morning|afternoon|evening|day)|greetings?)/i.test(s)
   const isSignOff = (s: string) => /^(thank\s*you|regards|best\s+wishes|cheers|sincerely|stay\s+blessed|have\s+a\s+nice|have\s+a\s+good|all\s+the\s+best|good\s+luck|warm\s+regards)/i.test(s)
   const isFiller = (s: string) => /^(please\s+be\s+informed|kindly\s+note|this\s+is\s+to\s+inform|i\s+would\s+like\s+to\s+inform)/i.test(s)
+  const isFragment = (s: string) => s.length < 30 && !/\b(invite|join|register|submit|attend|announce|welcome)\b/i.test(s)
 
-  const kept = sentences.filter(s => !isGreeting(s) && !isSignOff(s) && !isFiller(s))
+  const kept = sentences.filter(s => !isGreeting(s) && !isSignOff(s) && !isFiller(s) && !isFragment(s))
 
   if (kept.length === 0) return announcement.title
 
-  const topSentences = textRank(kept, 3)
-  let summary = topSentences.join(' ')
-
+  // Use the first meaningful sentence as the summary
+  let summary = kept[0]
   summary = summary.replace(/please\s+be\s+informed\s+that\s*/gi, '')
   summary = summary.replace(/kindly\s+note\s+that\s*/gi, '')
   summary = summary.replace(/this\s+is\s+to\s+inform\s+you\s+that\s*/gi, '')
   summary = summary.replace(/\s+/g, ' ').trim()
 
-  if (summary.length > 350) {
-    summary = summary.slice(0, 350).replace(/\s+\S*$/, '') + '...'
+  if (summary.length > 200) {
+    summary = summary.slice(0, 200).replace(/\s+\S*$/, '') + '...'
   }
 
   return summary || announcement.title
