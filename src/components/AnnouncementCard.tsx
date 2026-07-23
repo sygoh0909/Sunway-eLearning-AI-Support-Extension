@@ -1,13 +1,26 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { URGENCY_CONFIG } from '../utils/types'
 import type { SummarisedAnnouncement, Urgency } from '../utils/types'
 
 interface Props {
   announcement: SummarisedAnnouncement
+  onUrgencyChange?: (id: string, urgency: Urgency) => void
 }
 
-export default function AnnouncementCard({ announcement }: Props) {
+export default function AnnouncementCard({ announcement, onUrgencyChange }: Props) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [showUrgencyPicker, setShowUrgencyPicker] = useState(false)
+  const pickerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setShowUrgencyPicker(false)
+      }
+    }
+    if (showUrgencyPicker) document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showUrgencyPicker])
 
   const cleanText = (text: string) => {
     if (!text) return ''
@@ -57,9 +70,32 @@ export default function AnnouncementCard({ announcement }: Props) {
             </div>
           </div>
           {urgency && (
-            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium border flex-shrink-0 ${URGENCY_CONFIG[urgency].color}`}>
-              {URGENCY_CONFIG[urgency].label}
-            </span>
+            <div className="relative flex-shrink-0" ref={pickerRef}>
+              <button
+                onClick={(e) => { e.stopPropagation(); setShowUrgencyPicker(!showUrgencyPicker) }}
+                className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium border cursor-pointer hover:opacity-80 transition-opacity ${URGENCY_CONFIG[urgency].color}`}
+              >
+                {URGENCY_CONFIG[urgency].label}
+              </button>
+              {showUrgencyPicker && (
+                <div className="absolute right-0 top-full mt-1 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50 min-w-[100px]">
+                  {(Object.keys(URGENCY_CONFIG) as Urgency[]).map(opt => (
+                    <button
+                      key={opt}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onUrgencyChange?.(announcement.id, opt)
+                        setShowUrgencyPicker(false)
+                      }}
+                      className={`w-full px-2.5 py-1 text-left text-[11px] flex items-center gap-1.5 hover:bg-gray-50 ${opt === urgency ? 'font-semibold' : ''}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${URGENCY_CONFIG[opt].dotColor}`} />
+                      {URGENCY_CONFIG[opt].label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
         </div>
 

@@ -21,27 +21,56 @@ Scrapes data directly from eLearn's Blackboard REST API using the user's authent
 - Runs with concurrency control (3 parallel requests) to avoid rate limiting
 - Creates announcement cards for assignments that don't have matching announcements
 
-### 2. AI-Powered Text Summarisation (TextRank Algorithm)
+### 2. AI-Powered Text Summarisation & Key Info Extraction
 
 > `src/utils/ai.ts`
 
-Implements the **TextRank algorithm** — a graph-based unsupervised NLP technique inspired by Google's PageRank — to extract the most important sentences from announcement bodies:
+Provides two complementary NLP systems for understanding announcement content:
+
+#### Extractive Summary (First Meaningful Sentence)
+
+Extracts the first substantive sentence from announcement bodies as the summary:
+
+- **HTML stripping**: Removes all tags, decodes HTML entities (`&nbsp;`, `&amp;`, etc.)
+- **Emoji boundary splitting**: Splits text at emoji characters to separate structured data (📅 date 🕜 time 📍 venue) from prose
+- **Noise filtering**: Removes greetings ("Dear students..."), sign-offs ("Thank you..."), filler phrases ("Please be informed that..."), and short fragments
+- **Smart truncation**: Caps at 200 characters with word-boundary-aware trimming
+- Results are cached in Chrome storage — only new announcements are processed
+
+#### Structured Key Info Extraction (Regex NLP Pipeline)
+
+Extracts structured metadata fields from announcement text using a cascading multi-strategy pattern matching system:
+
+| Field | Extraction Strategy |
+|-------|-------------------|
+| **Date** | Labels (`Date:`, `held on:`), emoji prefixes (`📅`, `📌`), bare date patterns — supports ordinal suffixes (`25th`), day-of-week prefixes (`Friday, 24 July`), and formats: DD Month YYYY, Month DD YYYY, DD/MM/YYYY |
+| **Time** | Labels (`Time:`, `starts at:`), all 24 clock-face emojis (`🕐`–`🕧`), bare time ranges (`9:00 AM – 12:00 PM`) |
+| **Location/Platform** | Labels (`Venue:`, `Location:`, `Platform:`, `Mode:`), emoji prefixes (`📍`, `💻`) — handles both physical venues and virtual platforms (Microsoft Teams, Zoom) |
+| **Registration Fee** | Labels (`Registration fee:`, `Entry fee:`, `Admission:`), `💰` emoji with fee-related sublabel — explicitly excludes prize/win contexts to avoid false positives |
+| **Registration Deadline** | Labels (`Register by:`, `Registration Deadline:`, `Submission Deadline:`, `Nomination Deadline:`), `📝`/`📌` emojis, "extended until" phrasing — extracts just the date with optional time suffix and parenthetical day |
+| **Speakers** | Labels (`Speaker:`, `Keynote:`, `Presenter:`), supports Malaysian/academic honorifics (Dr., Ir., Prof., Ts., Engr., Assoc.) |
+| **Dress Code** | Labels (`Dress code:`, `Attire:`) — word-boundary matching to avoid false positives from "Address" |
+| **Contact** | Smart extraction prioritising actionable info: emails (`user@domain.com`), phone numbers (`+60...`), or name+email combos (`Dr. Name (email)`) — avoids capturing noisy sentence fragments |
+
+Key design decisions:
+- **Emoji-aware line splitting**: Text is split into logical lines at emoji boundaries (`\p{Extended_Pictographic}`), so emoji-delimited structured data (common in Sunway announcements) doesn't bleed across fields
+- **Cascading fallback strategy**: Each field tries label-based matching first (most specific), then emoji-prefixed matching, then bare pattern matching (least specific)
+- **Unicode-aware capture groups**: All captures stop at emoji boundaries (`[^\p{Extended_Pictographic}...]`) to prevent over-extraction in emoji-dense text
+- **Lookahead-based field boundaries**: Location captures use lazy matching with lookaheads for field-starting keywords (`registration`, `deadline`, `fee`, etc.) to prevent bleed-through in non-emoji text
+- **Word-boundary keyword matching**: Venue keywords (`room`, `hall`, `venue`) require `\b` word boundaries to prevent false matches inside compound words like "classroom" or "Townhall"
+- **False-positive prevention**: Registration fee skips prize/win contexts and requires fee-related labels; dress code requires word boundaries; date captures are tightly scoped to date patterns only; contact extracts structured data (email/phone) rather than raw text
+- **Date range support**: Handles ranges like "25 May – 5 June 2026" or "13–17 July 2026" using en-dash/hyphen separators
+
+#### TextRank Algorithm (Internal Component)
+
+The codebase also includes a **TextRank** graph-based ranking implementation for advanced sentence scoring:
 
 - **Tokenisation & stop-word removal**: Cleans text and removes 80+ common English stop words
 - **TF-based cosine similarity**: Builds a sentence similarity matrix using term frequency vectors
-- **Graph ranking**: Runs 30 iterations of the TextRank algorithm with damping factor 0.85 to converge on sentence importance scores
-- **Domain-specific sentence boosting**: Applies weighted scoring for:
-  - Date/time patterns (+1.5 for dates, +0.8 for times/days)
-  - Deadline keywords like "submit by", "due date" (+2.0)
-  - Academic keywords like "assignment", "quiz", "exam" (+1.5)
-  - Event keywords like "workshop", "seminar" (+1.2)
-  - Location signals like "venue", "room", "hall" (+0.8)
-  - Action-required phrases like "register", "submit" (+1.0)
-  - Urgency signals like "mandatory", "ASAP" (+1.2)
-- **Position bias**: First 3 sentences get a positional boost (lead bias)
+- **Graph ranking**: 30 iterations with damping factor 0.85
+- **Domain-specific sentence boosting**: Weighted scoring for dates (+1.5), deadlines (+2.0), academic terms (+1.5), events (+1.2), venues (+0.8), actions (+1.0), urgency (+1.2)
+- **Position bias**: First 3 sentences get a positional boost
 - **Length penalty**: Short sentences without key signals are down-weighted
-- **Noise filtering**: Removes greetings ("Dear students..."), sign-offs ("Thank you..."), and filler phrases ("Please be informed that...") before processing
-- Results are cached in Chrome storage — only new announcements are processed
 
 ### 3. AI-Powered Smart Categorisation (TF-IDF Keyword Classifier)
 
@@ -120,7 +149,8 @@ Parses announcement text to detect and extract deadlines using advanced pattern 
   - By urgency (Soon / Upcoming / Past)
   - By date range (from/to)
 - **Smart sorting**: Announcements sorted by urgency priority (soon -> upcoming -> overdue -> no deadline), then by date
-- **AI summary cards**: Each announcement shows a blue AI-generated summary box
+- **AI summary cards**: Each announcement shows a blue AI-generated summary box with structured key info fields (date, time, venue, fee, deadline, speakers, dress code, contact)
+- **Clickable urgency tags**: Click any urgency badge (Soon / Upcoming / Past) to manually override the auto-computed urgency level — dropdown picker with all options, persisted across sessions via Chrome storage
 - **Expandable original content**: Click to reveal the full announcement body
 - **Direct eLearn links**: "View" button links to the original announcement/assessment page
 - **Auto-refresh**: Automatically scrapes if data is stale (>5 minutes)
@@ -181,7 +211,7 @@ src/
 │   ├── SettingsTab.tsx       # Notification & refresh preferences
 │   └── SummaryTab.tsx        # Summary overview tab
 ├── components/
-│   ├── AnnouncementCard.tsx  # Card with urgency badge, AI summary, expandable body
+│   ├── AnnouncementCard.tsx  # Card with clickable urgency badge, AI summary, key info, expandable body
 │   ├── FilterPanel.tsx       # Collapsible multi-filter UI with tri-state toggles
 │   ├── UrgencyBadge.tsx      # Urgency status badge component
 │   ├── LoadingSpinner.tsx    # Loading state indicator
@@ -190,7 +220,7 @@ src/
     ├── ai.ts                 # TextRank summarisation engine with caching
     ├── deadlines.ts          # TF-IDF classifier, priority scoring, date extraction
     ├── scraper.ts            # Blackboard REST API scraper with concurrency control
-    ├── storage.ts            # Typed Chrome storage helpers with schema
+    ├── storage.ts            # Typed Chrome storage helpers with schema (includes urgency overrides)
     └── types.ts              # TypeScript interfaces and shared constants
 ```
 
@@ -200,11 +230,12 @@ src/
 
 | Component | Technique | Location | Purpose |
 |-----------|-----------|----------|---------|
-| Text Summarisation | TextRank (graph-based ranking) | `src/utils/ai.ts` | Extract key sentences from announcements |
+| Text Summarisation | First meaningful sentence extraction with noise filtering | `src/utils/ai.ts` | Generate concise one-sentence summaries |
+| Key Info Extraction | Cascading regex NLP with emoji-aware splitting | `src/utils/ai.ts` | Extract structured fields (date, time, venue, fee, deadline, speakers, dress, contact) |
 | Categorisation | TF-IDF weighted keyword scoring | `src/utils/deadlines.ts` | Classify into Deadline/Event/Academic/Administrative |
 | Priority Scoring | Multi-signal heuristic system | `src/utils/deadlines.ts` | Score urgency 1-10 for ranking and notifications |
 | Deadline Extraction | NLP pattern matching + date parsing | `src/utils/deadlines.ts` | Detect due dates and associated tasks from text |
-| Sentence Boosting | Domain-specific feature weighting | `src/utils/ai.ts` | Prioritise sentences with dates, actions, urgency |
+| TextRank Engine | Graph-based sentence ranking (PageRank-inspired) | `src/utils/ai.ts` | Domain-specific sentence importance scoring |
 
 ---
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { storageGet } from '../utils/storage'
-import type { SummarisedAnnouncement, AnnouncementCategory } from '../utils/types'
+import { storageGet, storageSet } from '../utils/storage'
+import type { SummarisedAnnouncement, AnnouncementCategory, Urgency } from '../utils/types'
 import { categorizeAnnouncement, scoreUrgency } from '../utils/deadlines'
 import AnnouncementCard from '../components/AnnouncementCard'
 import FilterPanel from '../components/FilterPanel'
@@ -25,6 +25,7 @@ export default function App() {
   const [urgencyFilters, setUrgencyFilters] = useState<Record<string, FilterState>>({})
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [urgencyOverrides, setUrgencyOverrides] = useState<Record<string, Urgency>>({})
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -38,10 +39,12 @@ export default function App() {
       setLoading(true)
       const data = await storageGet('summarised')
       const fetched = await storageGet('lastFetched')
+      const overrides = (await storageGet('urgencyOverrides')) ?? {}
+      setUrgencyOverrides(overrides)
       if (data) {
         for (const a of data) {
           for (const d of a.deadlines) {
-            d.urgency = d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming'
+            d.urgency = overrides[a.id] ?? (d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming')
           }
         }
       }
@@ -70,15 +73,27 @@ export default function App() {
   async function reloadFromStorage() {
     const data = await storageGet('summarised')
     const fetched = await storageGet('lastFetched')
+    const overrides = (await storageGet('urgencyOverrides')) ?? {}
+    setUrgencyOverrides(overrides)
     if (data) {
       for (const a of data) {
         for (const d of a.deadlines) {
-          d.urgency = d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming'
+          d.urgency = overrides[a.id] ?? (d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming')
         }
       }
     }
     setAnnouncements(data ?? [])
     setLastFetched(fetched)
+  }
+
+  async function handleUrgencyChange(announcementId: string, newUrgency: Urgency) {
+    const updated = { ...urgencyOverrides, [announcementId]: newUrgency }
+    setUrgencyOverrides(updated)
+    await storageSet('urgencyOverrides', updated)
+    setAnnouncements(prev => prev.map(a => {
+      if (a.id !== announcementId) return a
+      return { ...a, deadlines: a.deadlines.map(d => ({ ...d, urgency: newUrgency })) }
+    }))
   }
 
   async function handleRefresh() {
@@ -340,7 +355,7 @@ export default function App() {
               ) : (
                 <div className="space-y-3">
                   {filtered.map(announcement => (
-                    <AnnouncementCard key={announcement.id} announcement={announcement} />
+                    <AnnouncementCard key={announcement.id} announcement={announcement} onUrgencyChange={handleUrgencyChange} />
                   ))}
                 </div>
               )}
