@@ -205,7 +205,7 @@ export default function App() {
     ? 'w-full h-screen flex flex-col bg-gray-50'
     : isWindow
       ? 'w-full h-screen flex flex-col bg-gray-50 overflow-auto'
-      : 'w-[380px] min-h-[480px] max-h-[600px] flex flex-col bg-gray-50 resize overflow-auto'
+      : 'w-[380px] min-h-[480px] max-h-[600px] flex flex-col bg-gray-50 overflow-auto'
 
   if (loading) return (
     <div className={containerClass}>
