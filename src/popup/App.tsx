@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { storageGet } from '../utils/storage'
-import type { SummarisedAnnouncement, AnnouncementCategory } from '../utils/types'
+import { storageGet, storageSet } from '../utils/storage'
+import type { SummarisedAnnouncement, AnnouncementCategory, Urgency } from '../utils/types'
 import { categorizeAnnouncement, scoreUrgency } from '../utils/deadlines'
 import AnnouncementCard from '../components/AnnouncementCard'
 import FilterPanel from '../components/FilterPanel'
@@ -25,6 +25,7 @@ export default function App() {
   const [urgencyFilters, setUrgencyFilters] = useState<Record<string, FilterState>>({})
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  const [urgencyOverrides, setUrgencyOverrides] = useState<Record<string, Urgency>>({})
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -38,10 +39,12 @@ export default function App() {
       setLoading(true)
       const data = await storageGet('summarised')
       const fetched = await storageGet('lastFetched')
+      const overrides = (await storageGet('urgencyOverrides')) ?? {}
+      setUrgencyOverrides(overrides)
       if (data) {
         for (const a of data) {
           for (const d of a.deadlines) {
-            d.urgency = d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming'
+            d.urgency = overrides[a.id] ?? (d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming')
           }
         }
       }
@@ -70,15 +73,27 @@ export default function App() {
   async function reloadFromStorage() {
     const data = await storageGet('summarised')
     const fetched = await storageGet('lastFetched')
+    const overrides = (await storageGet('urgencyOverrides')) ?? {}
+    setUrgencyOverrides(overrides)
     if (data) {
       for (const a of data) {
         for (const d of a.deadlines) {
-          d.urgency = d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming'
+          d.urgency = overrides[a.id] ?? (d.dueDate ? scoreUrgency(d.dueDate) : 'upcoming')
         }
       }
     }
     setAnnouncements(data ?? [])
     setLastFetched(fetched)
+  }
+
+  async function handleUrgencyChange(announcementId: string, newUrgency: Urgency) {
+    const updated = { ...urgencyOverrides, [announcementId]: newUrgency }
+    setUrgencyOverrides(updated)
+    await storageSet('urgencyOverrides', updated)
+    setAnnouncements(prev => prev.map(a => {
+      if (a.id !== announcementId) return a
+      return { ...a, deadlines: a.deadlines.map(d => ({ ...d, urgency: newUrgency })) }
+    }))
   }
 
   async function handleRefresh() {
@@ -101,9 +116,9 @@ export default function App() {
   function handleOpenWindow() {
     chrome.windows.create({
       url: chrome.runtime.getURL('src/popup/index.html?mode=window'),
-      type: 'popup',
-      width: 500,
-      height: 700,
+      type: 'normal',
+      width: 600,
+      height: 800,
     })
   }
 
@@ -183,9 +198,14 @@ export default function App() {
     return db - da
   })
 
-  const containerClass = isSidebar
+  const params = new URLSearchParams(window.location.search)
+  const isWindow = params.get('mode') === 'window'
+
+  const containerClass = isSidebar && !isWindow
     ? 'w-full h-screen flex flex-col bg-gray-50'
-    : 'w-[380px] min-h-[480px] max-h-[600px] flex flex-col bg-gray-50 resize overflow-auto'
+    : isWindow
+      ? 'w-full h-screen flex flex-col bg-gray-50 overflow-auto'
+      : 'w-[380px] min-h-[480px] max-h-[600px] flex flex-col bg-gray-50 overflow-auto'
 
   if (loading) return (
     <div className={containerClass}>
@@ -228,15 +248,17 @@ export default function App() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
-            <button
-              onClick={handleOpenWindow}
-              className="p-1 rounded hover:bg-gray-100 text-gray-600"
-              title="Open in new tab"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-              </svg>
-            </button>
+            {!isWindow && (
+              <button
+                onClick={handleOpenWindow}
+                className="p-1 rounded hover:bg-gray-100 text-gray-600"
+                title="Open in full window"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </button>
+            )}
           </div>
         </div>
         {view === 'main' && (
@@ -283,7 +305,7 @@ export default function App() {
       <div className="flex-1 overflow-y-auto">
         <div className="p-3 space-y-3">
           {view === 'settings' ? (
-            <SettingsTab />
+            <SettingsTab onClose={() => setView('main')} />
           ) : (
             <>
               {error && <ErrorMessage message={error} />}
@@ -333,7 +355,7 @@ export default function App() {
               ) : (
                 <div className="space-y-3">
                   {filtered.map(announcement => (
-                    <AnnouncementCard key={announcement.id} announcement={announcement} />
+                    <AnnouncementCard key={announcement.id} announcement={announcement} onUrgencyChange={handleUrgencyChange} />
                   ))}
                 </div>
               )}

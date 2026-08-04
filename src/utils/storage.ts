@@ -14,6 +14,7 @@ export interface StorageSchema {
   lastFetched: number
   settings: AppSettings
   notifiedDeadlines: Record<string, number>
+  urgencyOverrides: Record<string, 'overdue' | 'soon' | 'upcoming'>
 }
 
 const DEFAULT_SETTINGS: AppSettings = {

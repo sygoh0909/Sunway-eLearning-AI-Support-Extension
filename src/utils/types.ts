@@ -32,11 +32,23 @@ export interface Deadline {
 
 export type AnnouncementCategory = 'Deadline' | 'Academic' | 'Event' | 'Administrative'
 
+export interface KeyInfo {
+  date?: string
+  time?: string
+  location?: string
+  registrationFee?: string
+  registrationDeadline?: string
+  speakers?: string[]
+  dress?: string
+  contact?: string
+}
+
 export interface SummarisedAnnouncement extends Announcement {
   summary: string
   deadlines: Deadline[]
   category: AnnouncementCategory
   priorityScore: number
+  keyInfo?: KeyInfo
 }
 
 export type NotificationTiming = '1day' | '3days' | '1week' | '2weeks'
