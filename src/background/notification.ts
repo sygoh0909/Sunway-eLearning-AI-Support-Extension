@@ -27,7 +27,7 @@ export function sendDeadlineNotification(deadline: Deadline): void {
 
   chrome.notifications.create(`deadline-${deadline.id}`, {
     type: 'basic',
-    iconUrl: chrome.runtime.getURL('public/favicon.svg'),
+    iconUrl: chrome.runtime.getURL('icon-128.png'),
     title: `${isUrgent ? '⚠️ ' : ''}${timeLabel}: ${deadline.task}`,
     message: `${deadline.courseName} — due ${formatted}`,
     priority: isUrgent ? 2 : 1,
