@@ -103,7 +103,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   const toNotify = eligible.slice(0, 5)
 
   for (const deadline of toNotify) {
-    sendDeadlineNotification(deadline)
+    await sendDeadlineNotification(deadline)
     notified[deadline.id] = now
   }
 

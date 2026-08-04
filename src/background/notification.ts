@@ -1,5 +1,7 @@
 import type { Deadline } from '../utils/types'
 
+const ICON_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+
 function getDaysUntilDue(dueDate: string): number {
   const now = new Date()
   now.setHours(0, 0, 0, 0)
@@ -8,7 +10,7 @@ function getDaysUntilDue(dueDate: string): number {
   return Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-export function sendDeadlineNotification(deadline: Deadline): void {
+export async function sendDeadlineNotification(deadline: Deadline): Promise<void> {
   const daysLeft = getDaysUntilDue(deadline.dueDate)
 
   let timeLabel: string
@@ -25,9 +27,9 @@ export function sendDeadlineNotification(deadline: Deadline): void {
 
   const isUrgent = daysLeft <= 1
 
-  chrome.notifications.create(`deadline-${deadline.id}`, {
+  await chrome.notifications.create(`deadline-${deadline.id}`, {
     type: 'basic',
-    iconUrl: chrome.runtime.getURL('public/favicon.svg'),
+    iconUrl: ICON_DATA_URL,
     title: `${isUrgent ? '⚠️ ' : ''}${timeLabel}: ${deadline.task}`,
     message: `${deadline.courseName} — due ${formatted}`,
     priority: isUrgent ? 2 : 1,
