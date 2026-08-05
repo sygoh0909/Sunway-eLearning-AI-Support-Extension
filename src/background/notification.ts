@@ -1,6 +1,5 @@
 import type { Deadline } from '../utils/types'
-
-const ICON_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=='
+import { getSettings } from '../utils/storage'
 
 function getDaysUntilDue(dueDate: string): number {
   const now = new Date()
@@ -10,7 +9,12 @@ function getDaysUntilDue(dueDate: string): number {
   return Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-export async function sendDeadlineNotification(deadline: Deadline): Promise<void> {
+export async function sendDeadlineNotification(deadline: Deadline, force = false): Promise<void> {
+  if (!force) {
+    const settings = await getSettings()
+    if (!settings.notificationsEnabled || !settings.notificationTypes.deadlineReminders) return
+  }
+
   const daysLeft = getDaysUntilDue(deadline.dueDate)
 
   let timeLabel: string
@@ -27,17 +31,34 @@ export async function sendDeadlineNotification(deadline: Deadline): Promise<void
 
   const isUrgent = daysLeft <= 1
 
-  await chrome.notifications.create(`deadline-${deadline.id}`, {
+  const notifId = `deadline-${deadline.id}`
+  if (deadline.linkUrl) notificationLinks.set(notifId, deadline.linkUrl)
+
+  chrome.notifications.create(notifId, {
     type: 'basic',
-    iconUrl: ICON_DATA_URL,
+    iconUrl: chrome.runtime.getURL('public/icon128.png'),
     title: `${isUrgent ? '⚠️ ' : ''}${timeLabel}: ${deadline.task}`,
     message: `${deadline.courseName} — due ${formatted}`,
     priority: isUrgent ? 2 : 1,
   })
 }
 
+const notificationLinks = new Map<string, string>()
+
 chrome.notifications.onClicked.addListener((notificationId) => {
-  if (notificationId.startsWith('deadline-')) {
+  if (!notificationId.startsWith('deadline-')) return
+  const url = notificationLinks.get(notificationId)
+  if (url) {
+    chrome.tabs.query({ url: 'https://elearn.sunway.edu.my/*' }, (tabs) => {
+      if (tabs.length > 0 && tabs[0].id) {
+        chrome.tabs.update(tabs[0].id, { url, active: true })
+        chrome.windows.update(tabs[0].windowId!, { focused: true })
+      } else {
+        chrome.tabs.create({ url })
+      }
+    })
+    notificationLinks.delete(notificationId)
+  } else {
     chrome.action.openPopup()
   }
 })

@@ -23,6 +23,7 @@ export default function SettingsTab({ onClose }: SettingsTabProps) {
       newAnnouncements: true,
       urgentOnly: false,
     },
+    notificationHour: 8,
   })
   const [saved, setSaved] = useState(false)
 
@@ -158,6 +159,25 @@ export default function SettingsTab({ onClose }: SettingsTabProps) {
                 </div>
               </div>
             )}
+
+            {/* Preferred notification time */}
+            <div>
+              <label className="text-xs font-medium text-gray-700 mb-1.5 block">Send notifications at</label>
+              <select
+                value={settings.notificationHour}
+                onChange={(e) => setSettings({ ...settings, notificationHour: Number(e.target.value) })}
+                className="w-full border border-gray-300 rounded-md px-2 py-1.5 text-sm focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+              >
+                {Array.from({ length: 24 }, (_, h) => (
+                  <option key={h} value={h}>
+                    {h === 0 ? '12:00 AM' : h < 12 ? `${h}:00 AM` : h === 12 ? '12:00 PM' : `${h - 12}:00 PM`}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[10px] text-gray-500 mt-1">
+                Notification will be sent within the selected hour (e.g. between 8:00–8:59 AM)
+              </p>
+            </div>
           </div>
         )}
       </div>

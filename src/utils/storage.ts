@@ -26,6 +26,7 @@ const DEFAULT_SETTINGS: AppSettings = {
     newAnnouncements: true,
     urgentOnly: false,
   },
+  notificationHour: 8,
 }
 
 export async function storageGet<K extends keyof StorageSchema>(

@@ -27,6 +27,7 @@ export interface Deadline {
   dueDate: string
   createdDate?: string
   contentId?: string
+  linkUrl?: string
   urgency: 'overdue' | 'soon' | 'upcoming'
 }
 
@@ -65,6 +66,7 @@ export interface AppSettings {
   notificationsEnabled: boolean
   notificationTiming: NotificationTiming[]
   notificationTypes: NotificationPreferences
+  notificationHour: number
 }
 
 

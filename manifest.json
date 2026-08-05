@@ -26,8 +26,8 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["src/popup/index.html"],
-      "matches": ["https://elearn.sunway.edu.my/*"]
+      "resources": ["src/popup/index.html", "public/icon128.png"],
+      "matches": ["https://elearn.sunway.edu.my/*", "<all_urls>"]
     }
   ]
 }
