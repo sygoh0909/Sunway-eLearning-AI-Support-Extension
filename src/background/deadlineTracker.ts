@@ -34,15 +34,17 @@ export function setupDeadlineAlarm(): void {
   chrome.alarms.create('check-deadlines', { periodInMinutes: 60 })
 }
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== 'check-deadlines') return
-
+export async function checkAndSendDeadlineNotifications(force = false): Promise<void> {
   const settings = await getSettings()
-  if (!settings.notificationsEnabled || !settings.notificationTypes.deadlineReminders) return
+
+  if (!force) {
+    if (!settings.notificationsEnabled || !settings.notificationTypes.deadlineReminders) return
+    if (settings.notificationTiming.length === 0) return
+    const currentHour = new Date().getHours()
+    if (currentHour !== settings.notificationHour) return
+  }
 
   const timings = settings.notificationTiming
-  if (timings.length === 0) return
-
   const notified: Record<string, number> = (await storageGet('notifiedDeadlines')) ?? {}
   const now = Date.now()
 
@@ -86,32 +88,33 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
   }
 
-  // Filter deadlines that fall within user's chosen notification window
   const eligible = allDeadlines
     .filter(dl => shouldNotify(dl.dueDate, timings))
     .filter(dl => {
+      if (force) return true
       const lastNotified = notified[dl.id]
-      // Don't re-notify within 12 hours
       if (lastNotified && (now - lastNotified) < 12 * 60 * 60 * 1000) return false
       return true
     })
 
-  // Sort by urgency: most urgent first (fewest days remaining)
   eligible.sort((a, b) => getDaysUntilDue(a.dueDate) - getDaysUntilDue(b.dueDate))
 
-  // Only notify the top 5 most urgent to avoid notification spam
   const toNotify = eligible.slice(0, 5)
 
   for (const deadline of toNotify) {
-    await sendDeadlineNotification(deadline)
+    await sendDeadlineNotification(deadline, force)
     notified[deadline.id] = now
   }
 
-  // Clean up old entries (older than 30 days)
   const cutoff = now - 30 * 24 * 60 * 60 * 1000
   for (const id of Object.keys(notified)) {
     if (notified[id] < cutoff) delete notified[id]
   }
 
   await storageSet('notifiedDeadlines', notified)
+}
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'check-deadlines') return
+  await checkAndSendDeadlineNotifications()
 })

@@ -100,18 +100,19 @@ export default function FilterPanel({
       onDateFromChange(formatDate(today))
       onDateToChange(formatDate(today))
     } else if (filter === 'week') {
-      // Week runs Saturday to today (or Mon–today depending on locale day)
-      // Use ISO week: Monday as start of week
       const day = today.getDay() // 0=Sun, 1=Mon, ..., 6=Sat
       const daysFromMonday = day === 0 ? 6 : day - 1
       const weekStart = new Date(today)
       weekStart.setDate(today.getDate() - daysFromMonday)
+      const weekEnd = new Date(weekStart)
+      weekEnd.setDate(weekStart.getDate() + 6)
       onDateFromChange(formatDate(weekStart))
-      onDateToChange(formatDate(today))
+      onDateToChange(formatDate(weekEnd))
     } else {
       const start = new Date(today.getFullYear(), today.getMonth(), 1)
+      const end = new Date(today.getFullYear(), today.getMonth() + 1, 0)
       onDateFromChange(formatDate(start))
-      onDateToChange(formatDate(today))
+      onDateToChange(formatDate(end))
     }
   }
 

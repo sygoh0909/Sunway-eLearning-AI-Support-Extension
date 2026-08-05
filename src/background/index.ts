@@ -24,6 +24,7 @@ chrome.runtime.onMessage.addListener((message: ChromeMessage, sender, sendRespon
     setupDeadlineAlarm()
     sendResponse({ success: true })
   }
+
   return false
 })
 

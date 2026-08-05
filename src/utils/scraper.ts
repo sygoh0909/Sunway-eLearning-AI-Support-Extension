@@ -252,6 +252,7 @@ export async function fetchAssignmentDeadlines(course: Course): Promise<Deadline
           ? (typeof created === 'string' ? created : new Date(created).toISOString())
           : ''
 
+        const gbContentId = col.contentId ?? col.id
         deadlines.push({
           id: `dl-gb-${course.id}-${col.id}`,
           courseId: course.id,
@@ -259,7 +260,10 @@ export async function fetchAssignmentDeadlines(course: Course): Promise<Deadline
           task,
           dueDate: isoDate,
           createdDate,
-          contentId: col.contentId ?? col.id,
+          contentId: gbContentId,
+          linkUrl: gbContentId
+            ? `${BASE_URL}/ultra/stream/assessment/${gbContentId}/overview?courseId=${course.id}`
+            : `${BASE_URL}/ultra/courses/${course.id}/outline`,
           urgency: scoreUrgency(isoDate),
         })
       }
@@ -404,6 +408,7 @@ function extractAssignmentItems(items: any[], course: Course): Deadline[] {
       dueDate: isoDate,
       createdDate,
       contentId: item.id,
+      linkUrl: `${BASE_URL}/ultra/stream/assessment/${item.id}/overview?courseId=${course.id}`,
       urgency: scoreUrgency(isoDate),
     })
   }
@@ -480,6 +485,7 @@ async function fetchLinkedItemDeadline(courseId: string, contentId: string, cour
         task: title,
         dueDate: isoDate,
         contentId,
+        linkUrl: `${BASE_URL}/ultra/stream/assessment/${contentId}/overview?courseId=${courseId}`,
         urgency: scoreUrgency(isoDate),
       }
     } catch {}
