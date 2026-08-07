@@ -132,10 +132,12 @@ Parses announcement text to detect and extract deadlines using advanced pattern 
 > `src/background/deadlineTracker.ts` and `src/background/notification.ts`
 
 - **User-configurable timing**: Choose to receive notifications 1 day, 3 days, 1 week, or 2 weeks before deadlines (multiple selections allowed)
+- **Preferred notification hour**: Choose what hour of the day to receive notifications (e.g., 8:00 AM) — only sends within the selected hour window
 - **Priority-based delivery**: Sorts all eligible deadlines by days remaining — most urgent first
 - **Spam prevention**: Maximum 5 notifications per check cycle; won't re-notify the same deadline within 12 hours
 - **Clear messaging**: Shows days remaining (e.g., "3 days left: Assignment 2") with urgent indicators for <=1 day items
-- **Automatic urgency refresh**: Checks every 60 minutes via Chrome Alarms API and updates urgency scores
+- **Click-through navigation**: Clicking a notification opens the relevant eLearn page — reuses an existing eLearn tab if open, or creates a new one
+- **Automatic urgency refresh**: Checks every 60 minutes via Chrome Alarms API and updates urgency scores for both announcement deadlines and assignment deadlines
 - **Old entry cleanup**: Automatically removes notification records older than 30 days
 
 ### 7. Popup Dashboard
@@ -175,6 +177,7 @@ Parses announcement text to detect and extract deadlines using advanced pattern 
   - New announcements on/off
   - Urgent items only mode
 - Reminder timing selection (1 day / 3 days / 1 week / 2 weeks) — multiple allowed
+- Preferred notification hour (select any hour from 12:00 AM to 11:00 PM)
 
 ---
 
